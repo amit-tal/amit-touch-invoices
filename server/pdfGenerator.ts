@@ -2,7 +2,27 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import type { AppDocument, BusinessSettings } from '../src/types/documents.ts';
-import { SIGNATURE_DATA_URI } from '../src/assets/signatureDataUri.ts';
+
+// Server-side visual signature resolver (prefers local server file, falls back to embedded constant)
+const FALLBACK_SIGNATURE_DATA_URI =
+  'data:image/png;base64,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';
+
+export function resolveSignatureDataUri(): string {
+  const candidatePaths = [
+    path.resolve(process.cwd(), 'signiture.png'),
+    path.resolve(process.cwd(), 'public/signiture.png'),
+    path.resolve(process.cwd(), 'public/signature.png'),
+  ];
+  for (const p of candidatePaths) {
+    if (fs.existsSync(p)) {
+      try {
+        const buf = fs.readFileSync(p);
+        return `data:image/png;base64,${buf.toString('base64')}`;
+      } catch (e) {}
+    }
+  }
+  return FALLBACK_SIGNATURE_DATA_URI;
+}
 
 function formatCurrency(amount: number | string, currency = '₪'): string {
   const num = typeof amount === 'number' ? amount : parseFloat(amount) || 0;
@@ -53,10 +73,11 @@ export function generateDocumentHtml(doc: AppDocument, businessSettings?: Busine
   const isTestIssued = isIssued && doc.isTestMode;
   const isElectronicReceipt = doc.type === 'receipt' && isIssued && !doc.isPaperReceipt;
 
+  const defaultSig = resolveSignatureDataUri();
   const rawSig = isDraft
-    ? (b.signatureUrl || SIGNATURE_DATA_URI)
-    : (doc.snapshot?.signatureUrl || doc.snapshot?.business?.signatureUrl || SIGNATURE_DATA_URI);
-  const signatureUrl = rawSig === '/signiture.png' || rawSig === '/signature.png' ? SIGNATURE_DATA_URI : rawSig;
+    ? (b.signatureUrl || defaultSig)
+    : (doc.snapshot?.signatureUrl || doc.snapshot?.business?.signatureUrl || defaultSig);
+  const signatureUrl = rawSig === '/signiture.png' || rawSig === '/signature.png' ? defaultSig : rawSig;
 
   const client = doc.snapshot?.client || {
     name: doc.clientName,

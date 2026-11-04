@@ -49,6 +49,7 @@ RUN pnpm install --prod --frozen-lockfile
 # Copy built frontend assets and server codebase
 COPY --from=builder /app/dist ./dist
 COPY server ./server
+COPY src ./src
 COPY public ./public
 COPY signiture.png ./signiture.png
 COPY .oxlintrc.json ./

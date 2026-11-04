@@ -8,7 +8,78 @@ import type {
   AuditLogEntry 
 } from '../src/types/documents.ts';
 import { generateDocumentPdfBuffer } from './pdfGenerator.ts';
-import { getDefaultEmailContent } from '../src/utils/moneyUtils.ts';
+
+function formatIsoDateSlash(isoStr?: string): string {
+  if (!isoStr) return '';
+  const [y, m, d] = isoStr.split('-');
+  if (!y || !m || !d) return isoStr;
+  return `${d}/${m}/${y}`;
+}
+
+function getDefaultEmailContent(
+  document: AppDocument,
+  business: BusinessSettings
+): { subject: string; messageBody: string } {
+  const docNum = document.documentNumber || 'טיוטה';
+  const customerName = document.clientName || 'לקוח/ה';
+  const formattedTotal = `${(document.totalAmount || 0).toLocaleString('he-IL')} ${document.currency || '₪'}`;
+  const senderName = business.legalName && !business.legalName.toUpperCase().includes('TOUCH')
+    ? business.legalName
+    : (business.tradingName || 'AMIT TOUCH');
+
+  if (document.type === 'payment_request') {
+    const subject = `AMIT TOUCH | חשבון עסקה מס׳ ${docNum}`;
+    const formattedDueDate = formatIsoDateSlash(document.dueDate);
+    const bodyLines = [
+      `שלום ${customerName},`,
+      ``,
+      `מצורף חשבון עסקה מס׳ ${docNum}.`,
+      ``,
+      `סכום לתשלום: ${formattedTotal}`,
+      ...(formattedDueDate ? [`מועד פירעון: ${formattedDueDate}`] : []),
+      ``,
+      `תודה על שיתוף הפעולה,`,
+      senderName,
+      `AMIT TOUCH`,
+    ];
+    return { subject, messageBody: bodyLines.join('\n') };
+  }
+
+  if (document.type === 'receipt') {
+    const subject = `AMIT TOUCH | קבלה מס׳ ${docNum}`;
+    const paidAmount = document.paidAmount || document.totalAmount || 0;
+    const formattedPaid = `${paidAmount.toLocaleString('he-IL')} ${document.currency || '₪'}`;
+    const bodyLines = [
+      `שלום ${customerName},`,
+      ``,
+      `מצורפת קבלה מס׳ ${docNum} המאשרת את קבלת התשלום.`,
+      ``,
+      `סכום ששולם: ${formattedPaid}`,
+      ``,
+      `תודה על שיתוף הפעולה,`,
+      senderName,
+      `AMIT TOUCH`,
+    ];
+    return { subject, messageBody: bodyLines.join('\n') };
+  }
+
+  // Quote
+  const subject = `AMIT TOUCH | הצעת מחיר מס׳ ${docNum}`;
+  const formattedValidUntil = formatIsoDateSlash(document.validUntilDate);
+  const bodyLines = [
+    `שלום ${customerName},`,
+    ``,
+    `מצורפת הצעת מחיר מס׳ ${docNum} לעיונך.`,
+    ``,
+    `סכום ההצעה: ${formattedTotal}`,
+    ...(formattedValidUntil ? [`בתוקף עד: ${formattedValidUntil}`] : []),
+    ``,
+    `תודה על שיתוף הפעולה,`,
+    senderName,
+    `AMIT TOUCH`,
+  ];
+  return { subject, messageBody: bodyLines.join('\n') };
+}
 import { 
   checkEmailProviderStatus, 
   saveEmailConfig, 
