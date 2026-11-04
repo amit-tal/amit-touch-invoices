@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  amit-touch-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: amit-touch-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - CHROME_BIN=/usr/bin/chromium
+      - OWNER_EMAIL=${OWNER_EMAIL:-}
+      - OWNER_PASSWORD=${OWNER_PASSWORD:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - EMAIL_FROM=${EMAIL_FROM:-}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-AMIT TOUCH}
+      - BACKUP_EXTERNAL_DIR=/app/protected_backups
+    volumes:
+      # Persistent storage volume for studio data (documents, sequences, clients, etc.)
+      - ./data:/app/data
+      # Isolated protected backup volume (separate failure domain)
+      - ./protected_backups:/app/protected_backups
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

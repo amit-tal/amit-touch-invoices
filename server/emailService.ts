@@ -1,0 +1,427 @@
+import fs from 'fs';
+import path from 'path';
+import nodemailer from 'nodemailer';
+import type { AppDocument, BusinessSettings } from '../src/types/documents.ts';
+
+const DATA_DIR = path.resolve(process.cwd(), 'data');
+const EMAIL_CONFIG_FILE = path.join(DATA_DIR, 'emailConfig.json');
+
+export interface EmailConfig {
+  provider: 'smtp' | 'resend' | 'sendgrid' | 'none';
+  fromEmail: string;
+  fromName: string;
+  smtp?: {
+    host: string;
+    port: number;
+    secure: boolean;
+    user: string;
+    pass: string;
+  };
+  resendApiKey?: string;
+  sendgridApiKey?: string;
+}
+
+// In-flight sending locks to prevent duplicate sends from repeated clicks
+const inFlightSends = new Set<string>();
+
+/**
+ * Load email configuration from data/emailConfig.json or environment variables
+ */
+export function getEmailConfig(): EmailConfig {
+  let fileConfig: Partial<EmailConfig> = {};
+  if (fs.existsSync(EMAIL_CONFIG_FILE)) {
+    try {
+      fileConfig = JSON.parse(fs.readFileSync(EMAIL_CONFIG_FILE, 'utf8'));
+    } catch {
+      fileConfig = {};
+    }
+  }
+
+  const envSmtpHost = process.env.SMTP_HOST;
+  const envSmtpPort = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : undefined;
+  const envSmtpUser = process.env.SMTP_USER;
+  const envSmtpPass = process.env.SMTP_PASS;
+  const envFromEmail = process.env.EMAIL_FROM || fileConfig.fromEmail || '';
+  const envFromName = process.env.EMAIL_FROM_NAME || fileConfig.fromName || 'AMIT TOUCH Studio';
+
+  if (envSmtpHost && envSmtpUser && envSmtpPass && envFromEmail) {
+    return {
+      provider: 'smtp',
+      fromEmail: envFromEmail,
+      fromName: envFromName,
+      smtp: {
+        host: envSmtpHost,
+        port: envSmtpPort || 587,
+        secure: process.env.SMTP_SECURE === 'true',
+        user: envSmtpUser,
+        pass: envSmtpPass,
+      },
+    };
+  }
+
+  return {
+    provider: fileConfig.provider || 'none',
+    fromEmail: fileConfig.fromEmail || '',
+    fromName: fileConfig.fromName || 'AMIT TOUCH Studio',
+    smtp: fileConfig.smtp,
+    resendApiKey: fileConfig.resendApiKey,
+    sendgridApiKey: fileConfig.sendgridApiKey,
+  };
+}
+
+/**
+ * Save updated email configuration (called by server admin/setup endpoint)
+ */
+export function saveEmailConfig(config: EmailConfig): void {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  fs.writeFileSync(EMAIL_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+}
+
+export interface EmailProviderStatus {
+  isConfigured: boolean;
+  provider: 'smtp' | 'resend' | 'sendgrid' | 'none';
+  fromEmail?: string;
+  fromName?: string;
+  smtpHost?: string;
+  missingRequirements: string[];
+}
+
+/**
+ * Check whether a valid provider and verified sender are configured
+ */
+export function checkEmailProviderStatus(): EmailProviderStatus {
+  const config = getEmailConfig();
+  const missingRequirements: string[] = [];
+
+  if (!config.fromEmail || !config.fromEmail.includes('@')) {
+    missingRequirements.push('כתובת שולח מאומתת (EMAIL_FROM)');
+  }
+
+  if (config.provider === 'smtp') {
+    if (!config.smtp?.host) missingRequirements.push('כתובת שרת SMTP (SMTP_HOST)');
+    if (!config.smtp?.user) missingRequirements.push('שם משתמש לשרת SMTP (SMTP_USER)');
+    if (!config.smtp?.pass) missingRequirements.push('סיסמה לשרת SMTP או App Password (SMTP_PASS)');
+  } else if (config.provider === 'resend') {
+    if (!config.resendApiKey) missingRequirements.push('מפתח API של Resend (RESEND_API_KEY)');
+  } else if (config.provider === 'sendgrid') {
+    if (!config.sendgridApiKey) missingRequirements.push('מפתח API של SendGrid (SENDGRID_API_KEY)');
+  } else {
+    missingRequirements.push('ספק דוא״ל מאומת (שרת SMTP)');
+  }
+
+  const isConfigured = missingRequirements.length === 0 && config.provider !== 'none';
+
+  return {
+    isConfigured,
+    provider: config.provider,
+    fromEmail: config.fromEmail,
+    fromName: config.fromName,
+    smtpHost: config.smtp?.host,
+    missingRequirements,
+  };
+}
+
+export interface SendDocumentEmailParams {
+  document: AppDocument;
+  business: BusinessSettings;
+  recipient: string;
+  subject: string;
+  messageBody: string;
+  pdfBuffer: Buffer;
+  pdfFilename: string;
+}
+
+export interface SendDocumentEmailResult {
+  success: boolean;
+  provider: string;
+  providerMessageId: string;
+  sentAt: string;
+  recipient: string;
+  subject: string;
+  pdfFilename: string;
+  previewUrl?: string;
+}
+
+/**
+ * Generate formatted HTML email body
+ */
+function escapeHtml(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Generate clean, refined AMIT TOUCH branded HTML email
+ */
+function buildHtmlEmail(params: SendDocumentEmailParams): string {
+  const { business, messageBody } = params;
+
+  // Split into paragraphs by blank lines (\n\n or \r\n\r\n)
+  const paragraphBlocks = messageBody
+    .split(/\r?\n\s*\r?\n/)
+    .map(block => block.trim())
+    .filter(Boolean);
+
+  const formattedParagraphs = paragraphBlocks
+    .map(block => {
+      const lines = block.split(/\r?\n/).map(line => escapeHtml(line.trim()));
+      return `<p style="margin: 0 0 16px 0; line-height: 1.65; color: #2B1816; font-size: 15px;">${lines.join('<br />')}</p>`;
+    })
+    .join('\n');
+
+  const businessDisplayName = escapeHtml(business.legalName || business.tradingName || 'AMIT TOUCH');
+  const businessNumberStr = business.businessNumber ? escapeHtml(business.businessNumber) : '';
+
+  return `
+<!DOCTYPE html>
+<html dir="rtl" lang="he" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
+  <title>${escapeHtml(params.subject)}</title>
+  <!--[if mso]>
+  <noscript>
+    <xml>
+      <o:OfficeDocumentSettings>
+        <o:PixelsPerInch>96</o:PixelsPerInch>
+      </o:OfficeDocumentSettings>
+    </xml>
+  </noscript>
+  <![endif]-->
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700&display=swap');
+
+    body, table, td, p, a, span, div {
+      font-family: 'Heebo', Arial, Helvetica, sans-serif !important;
+      -webkit-text-size-adjust: 100%;
+      -ms-text-size-adjust: 100%;
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0 !important;
+      padding: 0 !important;
+      background-color: #F8F6F5;
+      color: #2B1816;
+    }
+    @media only screen and (max-width: 600px) {
+      body {
+        padding: 12px 6px !important;
+      }
+      .email-card-table {
+        width: 100% !important;
+        max-width: 100% !important;
+        border-radius: 10px !important;
+      }
+      .email-card-header {
+        padding: 20px 16px 16px 16px !important;
+      }
+      .email-card-body {
+        padding: 20px 18px 20px 18px !important;
+      }
+      .email-footer-cell {
+        padding: 16px 18px !important;
+      }
+    }
+    @media (prefers-color-scheme: dark) {
+      body, .email-bg-table {
+        background-color: #1E1A19 !important;
+        color: #F5EFEB !important;
+      }
+      .email-card-table {
+        background-color: #272221 !important;
+        border-color: #443836 !important;
+      }
+      .email-card-cell {
+        background-color: #272221 !important;
+      }
+      .email-content-text p {
+        color: #F5EFEB !important;
+      }
+      .email-notice-box {
+        background-color: #2D2625 !important;
+        border-color: #554442 !important;
+        color: #E2CECC !important;
+      }
+      .email-footer-cell {
+        background-color: #201C1B !important;
+        border-color: #382E2C !important;
+        color: #BDB0AE !important;
+      }
+      .email-footer-title {
+        color: #EAE1DF !important;
+      }
+      .email-footer-phone, .email-footer-email, .email-footer-addr {
+        color: #CFC1BF !important;
+      }
+    }
+  </style>
+</head>
+<body style="margin: 0; padding: 28px 12px; background-color: #F8F6F5; font-family: 'Heebo', Arial, Helvetica, sans-serif; direction: rtl; text-align: right; -webkit-font-smoothing: antialiased;">
+  <!-- Centered container table -->
+  <table role="presentation" class="email-bg-table" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #F8F6F5; margin: 0; padding: 0;">
+    <tr>
+      <td align="center" style="padding: 0;">
+        <!-- Compact card (max-width: 580px) -->
+        <table role="presentation" class="email-card-table" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 580px; width: 100%; margin: 0 auto; background-color: #FFFFFF; border-radius: 14px; border: 1px solid #EAE1DF; box-shadow: 0 4px 18px rgba(188, 121, 111, 0.05); overflow: hidden;">
+          
+          <!-- Logo Header -->
+          <tr>
+            <td align="center" class="email-card-cell email-card-header" style="padding: 28px 28px 20px 28px; background-color: #FFFFFF; border-bottom: 1px solid #F3ECEB;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto;">
+                <tr>
+                  <td align="center">
+                    <img src="cid:amit-touch-logo@amittouch" alt="AMIT TOUCH" width="120" style="display: block; width: 120px; max-width: 120px; height: auto; border: 0; outline: none; text-decoration: none;" />
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Content Body -->
+          <tr>
+            <td class="email-card-cell email-card-body" style="padding: 28px 32px 24px 32px; background-color: #FFFFFF;">
+              <div class="email-content-text" style="font-size: 15px; line-height: 1.65; color: #2B1816; direction: rtl; text-align: right;">
+                ${formattedParagraphs}
+              </div>
+
+              <!-- Clean attachment notice -->
+              <div class="email-notice-box" style="margin-top: 24px; padding: 12px 16px; background-color: #FAF6F5; border-right: 3px solid #BC796F; border-radius: 6px; font-size: 13px; color: #6E4E49; direction: rtl; text-align: right;">
+                המסמך מצורף למייל כקובץ PDF
+              </div>
+            </td>
+          </tr>
+
+          <!-- Refined Footer -->
+          <tr>
+            <td class="email-footer-cell" style="padding: 20px 32px; background-color: #FAF7F6; border-top: 1px solid #EFE8E6; font-size: 12px; line-height: 1.6; color: #7D5A56; direction: rtl; text-align: right;">
+              <div class="email-footer-title" style="font-weight: 700; color: #3E2421; font-size: 13px; margin-bottom: 4px;">
+                ${businessDisplayName}
+                ${businessNumberStr ? `<span style="font-weight: 400; color: #8C6D68; font-size: 12px;"> | ח.פ/ע.מ <bdi dir="ltr">${businessNumberStr}</bdi></span>` : ''}
+              </div>
+              ${business.phone ? `<div class="email-footer-phone" style="margin-top: 2px; color: #5C4542;">טלפון: <bdi dir="ltr" style="unicode-bidi: embed; font-weight: 500;">${escapeHtml(business.phone)}</bdi></div>` : ''}
+              ${business.email ? `<div class="email-footer-email" style="margin-top: 2px; color: #5C4542;">דוא״ל: <bdi dir="ltr" style="unicode-bidi: embed; color: #88463F;">${escapeHtml(business.email)}</bdi></div>` : ''}
+              ${business.address ? `<div class="email-footer-addr" style="margin-top: 2px; color: #7D5A56;">כתובת: ${escapeHtml(business.address)}</div>` : ''}
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `.trim();
+}
+
+/**
+ * Send document email through configured provider
+ */
+export async function sendDocumentEmail(
+  params: SendDocumentEmailParams
+): Promise<SendDocumentEmailResult> {
+  const { document, recipient, subject, messageBody, pdfBuffer, pdfFilename } = params;
+
+  // 1. Prevent duplicate sends from repeated clicks (in-flight locking)
+  const lockKey = `${document.id}_${recipient.trim().toLowerCase()}`;
+  if (inFlightSends.has(lockKey)) {
+    throw new Error('בקשת שליחה למסמך זה נמצאת כעת בעיבוד פעיל מול ספק הדוא״ל. מניעת שליחה כפולה.');
+  }
+
+  // 2. Validate provider configuration
+  const status = checkEmailProviderStatus();
+  if (!status.isConfigured) {
+    const missing = status.missingRequirements.join(', ');
+    throw new Error(
+      `לא הוגדר ספק דוא״ל מאומת לשליחת מסמכים. שדות חסרים בשרת: ${missing}. יש להגדיר שרת SMTP או מפתח ספק וכתובת שולח מאומתת בשרת. לא בוצעה סימולציה.`
+    );
+  }
+
+  // 3. Validate recipient email format
+  const cleanRecipient = recipient.trim();
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!cleanRecipient || !emailRegex.test(cleanRecipient)) {
+    throw new Error(`כתובת הדוא״ל של הנמען אינה תקינה: "${cleanRecipient}".`);
+  }
+
+  inFlightSends.add(lockKey);
+  try {
+    const config = getEmailConfig();
+    let transporter: any;
+
+    if (config.provider === 'smtp') {
+      if (!config.smtp) throw new Error('הגדרות SMTP חסרות');
+      transporter = nodemailer.createTransport({
+        host: config.smtp.host,
+        port: config.smtp.port,
+        secure: config.smtp.secure,
+        auth: {
+          user: config.smtp.user,
+          pass: config.smtp.pass,
+        },
+      });
+
+      // Verify SMTP transport connection before sending
+      await transporter.verify();
+    } else {
+      throw new Error(`ספק דוא״ל מסוג "${config.provider}" אינו נתמך כעת. יש להגדיר חיבור SMTP מאומת.`);
+    }
+
+    const html = buildHtmlEmail(params);
+    const fromAddress = `"${config.fromName}" <${config.fromEmail}>`;
+
+    console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}> via SMTP (${config.smtp.host}:${config.smtp.port})...`);
+
+    const logoPath = path.resolve(process.cwd(), 'public', 'amit-touch-logo.png');
+    const attachments: any[] = [
+      {
+        filename: `${pdfFilename}.pdf`,
+        content: pdfBuffer,
+        contentType: 'application/pdf',
+      },
+    ];
+
+    if (fs.existsSync(logoPath)) {
+      attachments.push({
+        filename: 'amit-touch-logo.png',
+        path: logoPath,
+        cid: 'amit-touch-logo@amittouch',
+      });
+    }
+
+    const info = await transporter.sendMail({
+      from: fromAddress,
+      to: cleanRecipient,
+      subject: subject.trim(),
+      text: messageBody.trim(),
+      html,
+      attachments,
+    });
+
+    console.log(`[EMAIL_SERVER] Email successfully accepted by SMTP server for document "${document.documentNumber || document.id}". Message-ID: ${info.messageId}`);
+
+    return {
+      success: true,
+      provider: config.provider,
+      providerMessageId: info.messageId,
+      sentAt: new Date().toISOString(),
+      recipient: cleanRecipient,
+      subject: subject.trim(),
+      pdfFilename,
+    };
+  } finally {
+    // Release the duplicate-send lock after 4 seconds to protect against double clicks
+    setTimeout(() => {
+      inFlightSends.delete(lockKey);
+    }, 4000);
+  }
+}

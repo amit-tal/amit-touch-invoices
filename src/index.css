@@ -1,0 +1,400 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-rose-light: #E4AEA3;
+    --color-rose-muted: #D49B90;
+    --color-rose-dusty: #C9877C;
+    --color-rose-terracotta: #BC796F;
+    --color-rose-mauve: #A46A69;
+    accent-color: #BC796F;
+  }
+
+  /* Global dusty rose text selection */
+  ::selection {
+    background-color: #D49B90 !important;
+    color: #352D31 !important;
+  }
+
+  ::-moz-selection {
+    background-color: #D49B90 !important;
+    color: #352D31 !important;
+  }
+
+  input::selection,
+  textarea::selection {
+    background-color: #D49B90 !important;
+    color: #352D31 !important;
+  }
+
+  *, ::before, ::after {
+    font-family: 'Heebo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  html {
+    direction: rtl;
+    font-family: 'Heebo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  body {
+    background-color: #FAF4F2;
+    color: #2D1816;
+    font-family: 'Heebo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    direction: rtl;
+    text-align: right;
+  }
+
+  input, button, select, textarea, optgroup, option {
+    font-family: inherit;
+  }
+
+  /* Right-align all form labels and containers */
+  label, form, fieldset {
+    text-align: right;
+    direction: rtl;
+  }
+
+  /* Standard text inputs and textareas right-aligned in RTL */
+  input, textarea {
+    text-align: right;
+    direction: rtl;
+    font-family: inherit;
+  }
+
+  /* Numeric, currency, business registration numbers, emails, and URLs:
+     Positioned to the RIGHT side of the field while preserving LTR sequence order */
+  input[type="number"],
+  input[inputmode="numeric"],
+  input[type="tel"],
+  input[type="email"],
+  input[type="url"],
+  input[type="time"],
+  input.numeric-input,
+  .ltr-right {
+    text-align: right;
+    direction: ltr;
+    unicode-bidi: plaintext;
+  }
+
+  /* Ensure all placeholders are consistently right-aligned */
+  input::placeholder, textarea::placeholder {
+    text-align: right;
+    direction: rtl;
+    font-family: inherit;
+  }
+
+  input[type="number"]::placeholder,
+  input[inputmode="numeric"]::placeholder,
+  input[type="email"]::placeholder,
+  input[type="tel"]::placeholder,
+  .ltr-right::placeholder {
+    text-align: right;
+    direction: rtl;
+  }
+
+  select, option, optgroup {
+    direction: rtl;
+    text-align: right;
+    font-family: 'Heebo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  /* Accessible focused outline for keyboard nav */
+  :focus-visible {
+    outline: 2px solid #BC796F;
+    outline-offset: 2px;
+  }
+}
+
+/* Authentic Liquid Glass Material */
+.liquid-glass {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 249, 247, 0.46) 0%,
+    rgba(248, 226, 222, 0.28) 100%
+  );
+  backdrop-filter: blur(24px) saturate(115%);
+  -webkit-backdrop-filter: blur(24px) saturate(115%);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.25),
+    0 12px 32px rgba(109, 64, 61, 0.08);
+}
+
+.liquid-glass-sidebar {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 251, 249, 0.50) 0%,
+    rgba(250, 237, 234, 0.38) 100%
+  );
+  backdrop-filter: blur(26px) saturate(115%);
+  -webkit-backdrop-filter: blur(26px) saturate(115%);
+  border-left: 1px solid rgba(255, 255, 255, 0.65);
+  box-shadow:
+    inset 1px 0 0 rgba(255, 255, 255, 0.70),
+    -4px 0 24px -2px rgba(109, 64, 61, 0.05);
+}
+
+.liquid-glass-subtle {
+  background: rgba(255, 255, 255, 0.35);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.60);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    0 4px 16px -2px rgba(109, 64, 61, 0.04);
+}
+
+.liquid-glass-pill {
+  background: linear-gradient(
+    135deg,
+    rgba(228, 174, 163, 0.40) 0%,
+    rgba(201, 135, 124, 0.26) 100%
+  );
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.70),
+    0 3px 12px rgba(188, 121, 111, 0.15);
+}
+
+.liquid-glass-input {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(228, 174, 163, 0.35);
+  color: #2D1816;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.liquid-glass-input:focus {
+  background: rgba(255, 255, 255, 0.80);
+  border-color: #C9877C;
+  box-shadow:
+    0 0 0 3px rgba(201, 135, 124, 0.18),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.85);
+  outline: none;
+}
+
+.liquid-glass-btn-primary {
+  background: linear-gradient(135deg, #C9877C 0%, #BC796F 50%, #A46A69 100%);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.50),
+    0 6px 20px -2px rgba(188, 121, 111, 0.40);
+  transition: all 0.2s ease;
+}
+
+.liquid-glass-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.65),
+    0 8px 24px -2px rgba(188, 121, 111, 0.50);
+}
+
+.liquid-glass-btn-primary:active {
+  transform: translateY(0);
+}
+
+.liquid-glass-btn-danger {
+  background: linear-gradient(135deg, #CF6B60 0%, #B84F45 100%);
+  border: 1px solid rgba(255, 255, 255, 0.40);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.50),
+    0 6px 20px -2px rgba(184, 79, 69, 0.40);
+  transition: all 0.2s ease;
+}
+
+.liquid-glass-btn-secondary {
+  background: rgba(255, 255, 255, 0.38);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(228, 174, 163, 0.30);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.80),
+    0 2px 8px -1px rgba(109, 64, 61, 0.04);
+  transition: all 0.2s ease;
+}
+
+.liquid-glass-btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.65);
+  border-color: rgba(201, 135, 124, 0.45);
+  transform: translateY(-1px);
+}
+
+/* Tabular figures for timers and numbers */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  -moz-font-feature-settings: "tnum";
+  -webkit-font-feature-settings: "tnum";
+  font-feature-settings: "tnum";
+}
+
+/* Cross-browser scrollbar hiding while fully preserving wheel, trackpad, touch, and keyboard scrolling */
+html,
+body,
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* =========================================================================
+   Print & PDF Generation Environment Optimization
+   Ensures document previews export to A4 with clean white background,
+   instant asset rendering, zero modal backdrop bleeding, and intact signatures.
+   Strictly excludes all app navigation, headers, dashboard summaries, search,
+   filters, history tables, notices, and toasts from print.
+   ========================================================================= */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm 12mm;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #2D1816 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 100% !important;
+    overflow: visible !important;
+    font-family: 'Heebo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+    direction: rtl !important;
+  }
+
+  /* Force background colors, borders, and images in all browsers */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* 
+   * Strict Exclusion of App Chrome & Documents Page Background:
+   * Navigation, dashboard summaries, search, filters, tables, notices, and toasts
+   */
+  aside,
+  nav,
+  header,
+  .liquid-glass-sidebar,
+  .documents-page-content,
+  .print-hide,
+  .no-print,
+  .print\:hidden,
+  button,
+  input,
+  select,
+  textarea,
+  .toast-container {
+    display: none !important;
+  }
+
+  /* Background visual effects (e.g. glass ribbons, glow orbs) */
+  .fixed.inset-0.pointer-events-none,
+  .pointer-events-none {
+    display: none !important;
+  }
+
+  /* Neutralize modal backdrop & positioning for print */
+  .fixed.inset-0 {
+    position: static !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: auto !important;
+    z-index: auto !important;
+  }
+
+  .liquid-glass,
+  [role="dialog"] {
+    background: transparent !important;
+    background-color: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border: none !important;
+    box-shadow: none !important;
+    max-height: none !important;
+    overflow: visible !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Ensure modal scrollable bodies don't clip on print */
+  .flex-1.overflow-y-auto {
+    overflow: visible !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-height: none !important;
+    height: auto !important;
+  }
+
+  /* The printable A4 container */
+  .document-pdf-view,
+  .document-printable-wrapper {
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    page-break-after: auto !important;
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #2D1816 !important;
+  }
+
+  /* Avoid page breaks inside table rows, totals, and signature block */
+  tr,
+  thead,
+  .break-inside-avoid {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  /* Ensure logo and signature images print at exact design dimensions and proportions */
+  .document-pdf-view img {
+    print-color-adjust: exact !important;
+    -webkit-print-color-adjust: exact !important;
+  }
+
+  .document-pdf-view img[alt*="חתימ"] {
+    max-height: 4rem !important;
+    height: 4rem !important;
+    width: auto !important;
+    max-width: 190px !important;
+    display: inline-block !important;
+    object-fit: contain !important;
+  }
+
+  .document-pdf-view img:not([alt*="חתימ"]) {
+    max-height: 4rem !important;
+    height: 4rem !important;
+    width: auto !important;
+    max-width: 220px !important;
+    object-fit: contain !important;
+  }
+}
