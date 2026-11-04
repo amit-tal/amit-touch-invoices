@@ -7,7 +7,14 @@ import type {
   BusinessSettings, 
   AuditLogEntry 
 } from '../src/types/documents.ts';
-import { generateDocumentPdfBuffer } from './pdfGenerator.ts';
+// Lazy-load PDF generator to keep startup memory minimal and keep Chromium off until needed
+let _pdfGeneratorPromise: Promise<any> | null = null;
+function getPdfGenerator(): Promise<any> {
+  if (!_pdfGeneratorPromise) {
+    _pdfGeneratorPromise = import('./pdfGenerator.ts');
+  }
+  return _pdfGeneratorPromise;
+}
 
 function formatIsoDateSlash(isoStr?: string): string {
   if (!isoStr) return '';
@@ -113,7 +120,9 @@ import {
   verifyPdfDigitalSignature
 } from './digitalSignatureService.ts';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.resolve(process.cwd(), 'data');
 const DOCUMENTS_FILE = path.join(DATA_DIR, 'documents.json');
 const SEQUENCES_FILE = path.join(DATA_DIR, 'sequences.json');
 const BUSINESS_FILE = path.join(DATA_DIR, 'business.json');
@@ -321,91 +330,105 @@ function createRecoveryBackup(trigger: string): string {
 }
 
 // Ensure data folder and default files exist
-function ensureDataStore() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-
-  const defaultSequences: SequenceSettings = {
-    isProductionActive: false,
-    paymentRequestNext: 40016, // NEXT official payment request
-    receiptNext: 250016, // NEXT official receipt
-    quoteNext: null, // Unconfigured until user sets it
-    testSequenceNext: 1001,
-    isLocked: false,
-  };
-
-  const defaultBusiness: BusinessSettings = {
-    legalName: 'אמית טאץ׳ בע״מ',
-    tradingName: 'AMIT TOUCH',
-    businessNumber: '515234567',
-    businessType: 'licensed',
-    address: 'הברזל 24, רמת החייל, תל אביב',
-    phone: '03-6821456',
-    email: 'contact@amittouch.co.il',
-    logoUrl: '/amit-touch-logo.png',
-    currency: '₪',
-    bankDetails: {
-      bankName: 'בנק הפועלים (12)',
-      branch: '610 — רמת החייל',
-      accountNumber: '489201',
-      accountName: 'אמית טאץ׳ סטודיו לעיצוב בע״מ',
-    },
-    defaultPaymentTerms: 'שוטף + 30',
-    defaultQuoteValidityDays: 14,
-    defaultNotes: 'תודה על שיתוף הפעולה. תנאי תשלום כפי שצוין בדרישה זו.',
-    vatRate: 0.18, // Current VAT in Israel
-    isConfigured: true,
-  };
-
-  if (!fs.existsSync(DOCUMENTS_FILE)) {
-    fs.writeFileSync(DOCUMENTS_FILE, JSON.stringify([], null, 2), 'utf-8');
-  }
-  if (!fs.existsSync(SEQUENCES_FILE)) {
-    fs.writeFileSync(SEQUENCES_FILE, JSON.stringify(defaultSequences, null, 2), 'utf-8');
-  }
-  if (!fs.existsSync(BUSINESS_FILE)) {
-    fs.writeFileSync(BUSINESS_FILE, JSON.stringify(defaultBusiness, null, 2), 'utf-8');
-  }
-  if (!fs.existsSync(AUDIT_FILE)) {
-    fs.writeFileSync(AUDIT_FILE, JSON.stringify([], null, 2), 'utf-8');
-  }
-  if (!fs.existsSync(IDEMPOTENCY_FILE)) {
-    fs.writeFileSync(IDEMPOTENCY_FILE, JSON.stringify({}, null, 2), 'utf-8');
-  }
-  if (!fs.existsSync(CLIENTS_FILE)) {
-    fs.writeFileSync(CLIENTS_FILE, JSON.stringify([], null, 2), 'utf-8');
-  }
-  if (!fs.existsSync(PROJECTS_FILE)) {
-    fs.writeFileSync(PROJECTS_FILE, JSON.stringify([], null, 2), 'utf-8');
-  }
-  if (!fs.existsSync(ENTRIES_FILE)) {
-    fs.writeFileSync(ENTRIES_FILE, JSON.stringify([], null, 2), 'utf-8');
-  }
-  if (!fs.existsSync(BACKUPS_DIR)) {
-    fs.mkdirSync(BACKUPS_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(APP_SETTINGS_FILE)) {
-    fs.writeFileSync(APP_SETTINGS_FILE, JSON.stringify({
-      studioName: 'AMIT TOUCH',
-      defaultHourlyRate: 350,
-      currency: '₪',
-      timerReminder: {
-        enabled: true,
-        thresholdHours: 4,
-        browserNotificationsEnabled: false
-      }
-    }, null, 2), 'utf-8');
-  }
-  if (!fs.existsSync(BACKUP_STATUS_FILE)) {
-    performAutoBackup('initial_store_setup');
-  }
-
-  // Normalize legacy delivery statuses and label historical Ethereal test attempts
+let isEnsuringDataStore = false;
+function ensureDataStore(): void {
+  if (isEnsuringDataStore) return;
+  isEnsuringDataStore = true;
   try {
-    if (fs.existsSync(DOCUMENTS_FILE)) {
-      const docs = JSON.parse(fs.readFileSync(DOCUMENTS_FILE, 'utf8'));
-      let modified = false;
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+
+    const defaultSequences: SequenceSettings = {
+      isProductionActive: false,
+      paymentRequestNext: 40016, // NEXT official payment request
+      receiptNext: 250016, // NEXT official receipt
+      quoteNext: null, // Unconfigured until user sets it
+      testSequenceNext: 1001,
+      isLocked: false,
+    };
+
+    const defaultBusiness: BusinessSettings = {
+      legalName: 'אמית טאץ׳ בע״מ',
+      tradingName: 'AMIT TOUCH',
+      businessNumber: '515234567',
+      businessType: 'licensed',
+      address: 'הברזל 24, רמת החייל, תל אביב',
+      phone: '03-6821456',
+      email: 'contact@amittouch.co.il',
+      logoUrl: '/amit-touch-logo.png',
+      currency: '₪',
+      bankDetails: {
+        bankName: 'בנק הפועלים (12)',
+        branch: '610 — רמת החייל',
+        accountNumber: '489201',
+        accountName: 'אמית טאץ׳ סטודיו לעיצוב בע״מ',
+      },
+      defaultPaymentTerms: 'שוטף + 30',
+      defaultQuoteValidityDays: 14,
+      defaultNotes: 'תודה על שיתוף הפעולה. תנאי תשלום כפי שצוין בדרישה זו.',
+      vatRate: 0.18, // Current VAT in Israel
+      isConfigured: true,
+    };
+
+    if (!fs.existsSync(DOCUMENTS_FILE)) {
+      fs.writeFileSync(DOCUMENTS_FILE, JSON.stringify([], null, 2), 'utf-8');
+    }
+    if (!fs.existsSync(SEQUENCES_FILE)) {
+      fs.writeFileSync(SEQUENCES_FILE, JSON.stringify(defaultSequences, null, 2), 'utf-8');
+    }
+    if (!fs.existsSync(BUSINESS_FILE)) {
+      fs.writeFileSync(BUSINESS_FILE, JSON.stringify(defaultBusiness, null, 2), 'utf-8');
+    }
+    if (!fs.existsSync(AUDIT_FILE)) {
+      fs.writeFileSync(AUDIT_FILE, JSON.stringify([], null, 2), 'utf-8');
+    }
+    if (!fs.existsSync(IDEMPOTENCY_FILE)) {
+      fs.writeFileSync(IDEMPOTENCY_FILE, JSON.stringify({}, null, 2), 'utf-8');
+    }
+    if (!fs.existsSync(CLIENTS_FILE)) {
+      fs.writeFileSync(CLIENTS_FILE, JSON.stringify([], null, 2), 'utf-8');
+    }
+    if (!fs.existsSync(PROJECTS_FILE)) {
+      fs.writeFileSync(PROJECTS_FILE, JSON.stringify([], null, 2), 'utf-8');
+    }
+    if (!fs.existsSync(ENTRIES_FILE)) {
+      fs.writeFileSync(ENTRIES_FILE, JSON.stringify([], null, 2), 'utf-8');
+    }
+    if (!fs.existsSync(BACKUPS_DIR)) {
+      fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+    }
+    if (!fs.existsSync(APP_SETTINGS_FILE)) {
+      fs.writeFileSync(APP_SETTINGS_FILE, JSON.stringify({
+        studioName: 'AMIT TOUCH',
+        defaultHourlyRate: 350,
+        currency: '₪',
+        timerReminder: {
+          enabled: true,
+          thresholdHours: 4,
+          browserNotificationsEnabled: false
+        }
+      }, null, 2), 'utf-8');
+    }
+    if (!fs.existsSync(BACKUP_STATUS_FILE)) {
+      const initialStatus = {
+        lastBackupAt: new Date().toISOString(),
+        status: 'success',
+        totalLocalSnapshots: 0,
+        lastReason: 'initial_store_setup',
+        storageArchitecture: 'dual_domain_persistent_filesystem',
+        retention: '30_days',
+        isGuaranteedWhileClosed: false,
+      };
+      fs.writeFileSync(BACKUP_STATUS_FILE, JSON.stringify(initialStatus, null, 2), 'utf-8');
+      performAutoBackup('initial_store_setup');
+    }
+
+    // Normalize legacy delivery statuses and label historical Ethereal test attempts
+    try {
+      if (fs.existsSync(DOCUMENTS_FILE)) {
+        const docs = JSON.parse(fs.readFileSync(DOCUMENTS_FILE, 'utf8'));
+        let modified = false;
       for (const d of docs) {
         // Label historical Ethereal test attempts
         if (d.deliveryDetails?.sendAttempts) {
@@ -458,6 +481,9 @@ function ensureDataStore() {
     }
   } catch (err) {
     console.error('Error normalizing legacy documents:', err);
+  }
+  } finally {
+    isEnsuringDataStore = false;
   }
 }
 
@@ -516,14 +542,15 @@ function releaseLock() {
 
 // Helper readers and crash-safe atomic writers
 function readJson<T>(filePath: string): T {
-  ensureDataStore();
   const raw = fs.readFileSync(filePath, 'utf-8');
   return JSON.parse(raw) as T;
 }
 
 function writeJson(filePath: string, data: any): void {
-  ensureDataStore();
   const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
   const randomSuffix = crypto.randomBytes(6).toString('hex');
   const tempPath = path.join(dir, `.${path.basename(filePath)}.${Date.now()}.${randomSuffix}.tmp`);
   const content = JSON.stringify(data, null, 2);
@@ -1185,6 +1212,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           const signedFilename = `${safeTypeStr}_${issuedDoc.documentNumber}_${issuedDoc.id}.pdf`;
           const targetFilePath = path.join(SIGNED_DOCS_DIR, signedFilename);
 
+          const { generateDocumentPdfBuffer } = await getPdfGenerator();
           const initialPdfBuffer = generateDocumentPdfBuffer(issuedDoc, business);
           const creds = loadSigningCredentials();
 
@@ -1574,10 +1602,12 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
             if (fs.existsSync(signedPath)) {
               pdfBuffer = fs.readFileSync(signedPath);
             } else {
-              pdfBuffer = await generateDocumentPdfBuffer(doc, business);
+              const { generateDocumentPdfBuffer } = await getPdfGenerator();
+              pdfBuffer = generateDocumentPdfBuffer(doc, business);
             }
           } else {
-            pdfBuffer = await generateDocumentPdfBuffer(doc, business);
+            const { generateDocumentPdfBuffer } = await getPdfGenerator();
+            pdfBuffer = generateDocumentPdfBuffer(doc, business);
           }
 
           try {
@@ -2249,9 +2279,11 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
             if (fs.existsSync(signedPath)) {
               pdfBuffer = fs.readFileSync(signedPath);
             } else {
+              const { generateDocumentPdfBuffer } = await getPdfGenerator();
               pdfBuffer = generateDocumentPdfBuffer(docToRender, businessSettings);
             }
           } else {
+            const { generateDocumentPdfBuffer } = await getPdfGenerator();
             pdfBuffer = generateDocumentPdfBuffer(docToRender, businessSettings);
           }
 
@@ -2378,6 +2410,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           const signedFilename = `receipt_${testDoc.documentNumber}_${testDoc.id}.pdf`;
           const targetFilePath = path.join(SIGNED_DOCS_DIR, signedFilename);
 
+          const { generateDocumentPdfBuffer } = await getPdfGenerator();
           const initialPdfBuffer = generateDocumentPdfBuffer(testDoc, business);
           const signedPdf = signPdfBuffer(
             initialPdfBuffer,
