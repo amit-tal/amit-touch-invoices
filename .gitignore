@@ -46,7 +46,9 @@ data/signed_documents/
 data/test_packages/
 data/backup_*
 protected_backups/
-*backup*
+*.backup
+*.backup.json
+!src/**
 
 # Scratch & temporary testing artifacts
 scratch/
