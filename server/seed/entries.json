@@ -1,0 +1,309 @@
+[
+  {
+    "id": "entry_1793722105716",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "הכנות לעלייה של מדיק",
+    "date": "2026-11-03",
+    "startTime": "09:00",
+    "endTime": "17:00",
+    "durationSeconds": 28800,
+    "createdAt": "2026-11-03T16:08:25.716Z"
+  },
+  {
+    "id": "entry_1793693699910",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "הכנסת מבצע שופינג IL באתרים",
+    "date": "2026-11-03",
+    "startTime": "08:00",
+    "endTime": "09:00",
+    "durationSeconds": 3600,
+    "createdAt": "2026-11-03T08:14:59.910Z"
+  },
+  {
+    "id": "entry_1793546550391",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "באנרים לעליית דוח השינה בעמינח",
+    "date": "2026-11-01",
+    "startTime": "17:00",
+    "endTime": "17:30",
+    "durationSeconds": 1800,
+    "createdAt": "2026-11-01T15:22:30.391Z"
+  },
+  {
+    "id": "entry_1793544908012",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "ישיבת סטטוס",
+    "date": "2026-11-01",
+    "startTime": "12:00",
+    "endTime": "13:00",
+    "durationSeconds": 3600,
+    "createdAt": "2026-11-01T14:55:08.012Z"
+  },
+  {
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "עדכון מבצעי נובמבר באתרים",
+    "date": "2026-11-01",
+    "startTime": "08:30",
+    "endTime": "12:00",
+    "durationSeconds": 12600,
+    "id": "entry_1793526801198",
+    "createdAt": "2026-11-01T09:53:21.198Z"
+  },
+  {
+    "id": "entry_1793282730565",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "עמינח מדיק - עבודה על האתר החדש + משימות באתרים",
+    "durationSeconds": 28800,
+    "date": "2026-10-29",
+    "createdAt": "2026-10-29T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276314941",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "מדיק החדש + הכנת מבצעי חודש נובמבר + סופרברנדס",
+    "durationSeconds": 28800,
+    "date": "2026-10-28",
+    "createdAt": "2026-10-28T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276304798",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "מדיק החדש + פיירזון + דוח השינה",
+    "durationSeconds": 28800,
+    "date": "2026-10-26",
+    "createdAt": "2026-10-26T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276292925",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "מדיק החדש + משימות באתרים",
+    "durationSeconds": 25200,
+    "date": "2026-10-25",
+    "createdAt": "2026-10-25T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276283275",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "מבצעי הבחירות באתרים",
+    "durationSeconds": 3600,
+    "date": "2026-10-25",
+    "createdAt": "2026-10-25T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276274138",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "אתר מדיק החדש",
+    "durationSeconds": 3600,
+    "date": "2026-10-23",
+    "createdAt": "2026-10-23T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276263560",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "מדיק החדש",
+    "durationSeconds": 21600,
+    "date": "2026-10-22",
+    "createdAt": "2026-10-22T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276253954",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "סגירות דוח השינה של ישראל",
+    "durationSeconds": 7200,
+    "date": "2026-10-22",
+    "createdAt": "2026-10-22T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276244644",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "אתר עמינח מדיק החדש",
+    "durationSeconds": 21600,
+    "date": "2026-10-20",
+    "createdAt": "2026-10-20T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276233408",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "משימות כלליות באתרים",
+    "durationSeconds": 7200,
+    "date": "2026-10-20",
+    "createdAt": "2026-10-20T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276221428",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "המשך עבודה על דף דוח השינה + משימות באתרים",
+    "durationSeconds": 28800,
+    "date": "2026-10-19",
+    "createdAt": "2026-10-19T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276204856",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "דף נחיתה - דוח השינה של ישראל",
+    "durationSeconds": 28800,
+    "date": "2026-10-18",
+    "createdAt": "2026-10-18T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276195762",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "משימות באתרים",
+    "durationSeconds": 25200,
+    "date": "2026-10-15",
+    "createdAt": "2026-10-15T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276180152",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "הקמת חדר שינה אסטוניה בעמינח",
+    "durationSeconds": 3600,
+    "date": "2026-10-14",
+    "createdAt": "2026-10-14T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276166635",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "עמינח מדיק החדש",
+    "durationSeconds": 3600,
+    "date": "2026-10-13",
+    "createdAt": "2026-10-13T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276157086",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "פגישה לקראת עלייה של דוח השינה",
+    "durationSeconds": 3600,
+    "date": "2026-10-13",
+    "createdAt": "2026-10-13T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276147626",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "עמינח מדיק החדש",
+    "durationSeconds": 21600,
+    "date": "2026-10-13",
+    "createdAt": "2026-10-13T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276132120",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "עמינח מדיק החדש ומשימות שוטפות",
+    "durationSeconds": 28800,
+    "date": "2026-10-12",
+    "createdAt": "2026-10-12T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276120253",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "עבודה על עמינח מדיק החדש",
+    "durationSeconds": 27000,
+    "date": "2026-10-11",
+    "createdAt": "2026-10-11T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276105420",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "הורדת פלאש סייל",
+    "durationSeconds": 3600,
+    "date": "2026-10-11",
+    "createdAt": "2026-10-11T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276090127",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "הפעלת מבצעי פלאש סייל",
+    "durationSeconds": 3600,
+    "date": "2026-10-08",
+    "createdAt": "2026-10-08T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276077536",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "עמינח מדיק החדש",
+    "durationSeconds": 21600,
+    "date": "2026-10-08",
+    "createdAt": "2026-10-08T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276062084",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "הכנות מבצע פלאש סייל סופש באתרים",
+    "durationSeconds": 7200,
+    "date": "2026-10-08",
+    "createdAt": "2026-10-08T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276038054",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "פיירזון",
+    "durationSeconds": 16200,
+    "date": "2026-10-07",
+    "createdAt": "2026-10-07T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276026154",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "הקמת כיסאות משרדיים חדשים",
+    "durationSeconds": 7200,
+    "date": "2026-10-07",
+    "createdAt": "2026-10-07T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793276005244",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "תווית עמינח PET",
+    "durationSeconds": 5400,
+    "date": "2026-10-07",
+    "createdAt": "2026-10-07T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793275989434",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "משימות באתרים",
+    "durationSeconds": 28800,
+    "date": "2026-10-06",
+    "createdAt": "2026-10-06T10:00:00.000Z"
+  },
+  {
+    "id": "entry_1793275965057",
+    "clientId": "client_1793269318815",
+    "projectId": "project_1793275797630",
+    "task": "עדכון מבצעי חודש אוקטובר באתרים",
+    "durationSeconds": 18000,
+    "date": "2026-10-05",
+    "createdAt": "2026-10-05T10:00:00.000Z"
+  }
+]

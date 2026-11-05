@@ -1,0 +1,16 @@
+[
+  {
+    "id": "client_1793269318815",
+    "name": "עמינח תעשיית רהיטים ומזרונים בע\"מ",
+    "color": "#BC796F",
+    "businessNumber": "510550734",
+    "email": "amit@aminach.co.il",
+    "paymentTerms": "שוטף + 30",
+    "createdAt": "2026-10-29T10:00:00.000Z",
+    "electronicConsent": {
+      "status": "consented",
+      "consentedAt": "2026-11-03",
+      "sourceReference": "הסכמת לקוח בכתב"
+    }
+  }
+]

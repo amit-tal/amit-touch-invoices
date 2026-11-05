@@ -371,14 +371,34 @@ function ensureDataStore(): void {
       isConfigured: true,
     };
 
-    if (!fs.existsSync(DOCUMENTS_FILE)) {
-      fs.writeFileSync(DOCUMENTS_FILE, JSON.stringify([], null, 2), 'utf-8');
+    const SEED_DIR = path.resolve(process.cwd(), 'server', 'seed');
+    function loadSeedOrDefault<T>(fileName: string, fallback: T): T {
+      const seedPath = path.join(SEED_DIR, fileName);
+      if (fs.existsSync(seedPath)) {
+        try {
+          return JSON.parse(fs.readFileSync(seedPath, 'utf8')) as T;
+        } catch (e) {
+          console.warn(`Could not read seed file ${fileName}:`, e);
+        }
+      }
+      return fallback;
+    }
+
+    if (!fs.existsSync(DOCUMENTS_FILE) || (fs.existsSync(DOCUMENTS_FILE) && JSON.parse(fs.readFileSync(DOCUMENTS_FILE, 'utf8') || '[]').length === 0)) {
+      const initialDocs = loadSeedOrDefault('documents.json', []);
+      if (initialDocs.length > 0) {
+        fs.writeFileSync(DOCUMENTS_FILE, JSON.stringify(initialDocs, null, 2), 'utf-8');
+      } else if (!fs.existsSync(DOCUMENTS_FILE)) {
+        fs.writeFileSync(DOCUMENTS_FILE, JSON.stringify([], null, 2), 'utf-8');
+      }
     }
     if (!fs.existsSync(SEQUENCES_FILE)) {
-      fs.writeFileSync(SEQUENCES_FILE, JSON.stringify(defaultSequences, null, 2), 'utf-8');
+      const initialSequences = loadSeedOrDefault('sequences.json', defaultSequences);
+      fs.writeFileSync(SEQUENCES_FILE, JSON.stringify(initialSequences, null, 2), 'utf-8');
     }
     if (!fs.existsSync(BUSINESS_FILE)) {
-      fs.writeFileSync(BUSINESS_FILE, JSON.stringify(defaultBusiness, null, 2), 'utf-8');
+      const initialBusiness = loadSeedOrDefault('business.json', defaultBusiness);
+      fs.writeFileSync(BUSINESS_FILE, JSON.stringify(initialBusiness, null, 2), 'utf-8');
     }
     if (!fs.existsSync(AUDIT_FILE)) {
       fs.writeFileSync(AUDIT_FILE, JSON.stringify([], null, 2), 'utf-8');
@@ -386,14 +406,29 @@ function ensureDataStore(): void {
     if (!fs.existsSync(IDEMPOTENCY_FILE)) {
       fs.writeFileSync(IDEMPOTENCY_FILE, JSON.stringify({}, null, 2), 'utf-8');
     }
-    if (!fs.existsSync(CLIENTS_FILE)) {
-      fs.writeFileSync(CLIENTS_FILE, JSON.stringify([], null, 2), 'utf-8');
+    if (!fs.existsSync(CLIENTS_FILE) || (fs.existsSync(CLIENTS_FILE) && JSON.parse(fs.readFileSync(CLIENTS_FILE, 'utf8') || '[]').length === 0)) {
+      const initialClients = loadSeedOrDefault('clients.json', []);
+      if (initialClients.length > 0) {
+        fs.writeFileSync(CLIENTS_FILE, JSON.stringify(initialClients, null, 2), 'utf-8');
+      } else if (!fs.existsSync(CLIENTS_FILE)) {
+        fs.writeFileSync(CLIENTS_FILE, JSON.stringify([], null, 2), 'utf-8');
+      }
     }
-    if (!fs.existsSync(PROJECTS_FILE)) {
-      fs.writeFileSync(PROJECTS_FILE, JSON.stringify([], null, 2), 'utf-8');
+    if (!fs.existsSync(PROJECTS_FILE) || (fs.existsSync(PROJECTS_FILE) && JSON.parse(fs.readFileSync(PROJECTS_FILE, 'utf8') || '[]').length === 0)) {
+      const initialProjects = loadSeedOrDefault('projects.json', []);
+      if (initialProjects.length > 0) {
+        fs.writeFileSync(PROJECTS_FILE, JSON.stringify(initialProjects, null, 2), 'utf-8');
+      } else if (!fs.existsSync(PROJECTS_FILE)) {
+        fs.writeFileSync(PROJECTS_FILE, JSON.stringify([], null, 2), 'utf-8');
+      }
     }
-    if (!fs.existsSync(ENTRIES_FILE)) {
-      fs.writeFileSync(ENTRIES_FILE, JSON.stringify([], null, 2), 'utf-8');
+    if (!fs.existsSync(ENTRIES_FILE) || (fs.existsSync(ENTRIES_FILE) && JSON.parse(fs.readFileSync(ENTRIES_FILE, 'utf8') || '[]').length === 0)) {
+      const initialEntries = loadSeedOrDefault('entries.json', []);
+      if (initialEntries.length > 0) {
+        fs.writeFileSync(ENTRIES_FILE, JSON.stringify(initialEntries, null, 2), 'utf-8');
+      } else if (!fs.existsSync(ENTRIES_FILE)) {
+        fs.writeFileSync(ENTRIES_FILE, JSON.stringify([], null, 2), 'utf-8');
+      }
     }
     if (!fs.existsSync(BACKUPS_DIR)) {
       fs.mkdirSync(BACKUPS_DIR, { recursive: true });

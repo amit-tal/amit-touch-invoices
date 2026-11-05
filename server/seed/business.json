@@ -1,0 +1,23 @@
+{
+  "legalName": "עמית טל",
+  "tradingName": "AMIT TOUCH DESIGN STUDIO",
+  "businessNumber": "322889486",
+  "businessType": "exempt",
+  "address": "רוזנשטיין 12, ראשון לציון",
+  "phone": "052-7467143",
+  "email": "amit2001tal@gmail.com",
+  "logoUrl": "/amit-touch-logo.png",
+  "signatureUrl": "/signiture.png",
+  "currency": "₪",
+  "bankDetails": {
+    "bankName": "בנק הפועלים (12)",
+    "branch": "170 — הראשי ת\"א",
+    "accountNumber": "23141",
+    "accountName": "עמית טל"
+  },
+  "defaultPaymentTerms": "שוטף + 30",
+  "defaultQuoteValidityDays": 14,
+  "defaultNotes": "תודה על שיתוף הפעולה. תנאי תשלום כפי שצוין בדרישה זו.",
+  "vatRate": 0,
+  "isConfigured": true
+}

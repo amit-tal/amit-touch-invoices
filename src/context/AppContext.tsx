@@ -437,15 +437,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const res = await fetch('/api/app-data');
       if (!res.ok) return;
       const data = await res.json();
-      if (Array.isArray(data.clients)) {
+      if (Array.isArray(data.clients) && (data.clients.length > 0 || !localStorage.getItem(STORAGE_KEYS.CLIENTS))) {
         setClients(data.clients);
         localStorage.setItem(STORAGE_KEYS.CLIENTS, JSON.stringify(data.clients));
       }
-      if (Array.isArray(data.projects)) {
+      if (Array.isArray(data.projects) && (data.projects.length > 0 || !localStorage.getItem(STORAGE_KEYS.PROJECTS))) {
         setProjects(data.projects);
         localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(data.projects));
       }
-      if (Array.isArray(data.entries)) {
+      if (Array.isArray(data.entries) && (data.entries.length > 0 || !localStorage.getItem(STORAGE_KEYS.ENTRIES))) {
         setEntries(data.entries);
         localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(data.entries));
       }

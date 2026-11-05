@@ -109,6 +109,16 @@ export function consumeSetupToken(): void {
 export function getOwnerAccount(): OwnerAccount | null {
   ensureAuthStore();
   if (!fs.existsSync(AUTH_FILE)) {
+    // Check seed fallback
+    const seedAuthPath = path.resolve(process.cwd(), 'server', 'seed', 'auth.json');
+    if (fs.existsSync(seedAuthPath)) {
+      try {
+        const seedData = JSON.parse(fs.readFileSync(seedAuthPath, 'utf8'));
+        saveOwnerAccount(seedData);
+        return seedData;
+      } catch {}
+    }
+
     // Check environment variable fallback or persistent default for ephemeral cloud hosts
     const envEmail = process.env.OWNER_EMAIL || process.env.ADMIN_EMAIL || 'amit2001tal@gmail.com';
     const envPass = process.env.OWNER_PASSWORD || process.env.ADMIN_PASSWORD || 'AmitTouch2026!';
