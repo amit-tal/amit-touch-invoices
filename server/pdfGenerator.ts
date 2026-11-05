@@ -668,8 +668,33 @@ export function generateDocumentPdfBuffer(doc: AppDocument, businessSettings?: B
 
   try {
     fs.writeFileSync(tmpHtml, html, 'utf8');
-    const cmd = `"${chromePath}" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --no-pdf-header-footer --print-to-pdf="${tmpPdf}" "${tmpHtml}"`;
-    execSync(cmd, { stdio: 'pipe' });
+
+    // Ultra-low-memory Chromium flags for constrained container environments (e.g. Render Free 512MB RAM)
+    // --single-process runs browser, utility, and renderer within one process (~40-60MB vs 300MB+ in multi-process)
+    const lowMemoryFlags = [
+      '--headless=new',
+      '--single-process',
+      '--no-zygote',
+      '--renderer-process-limit=1',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--disable-software-rasterizer',
+      '--disable-accelerated-2d-canvas',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-sync',
+      '--disable-default-apps',
+      '--mute-audio',
+      '--no-first-run',
+      '--hide-scrollbars',
+      '--no-pdf-header-footer',
+      '--js-flags="--max-old-space-size=64"'
+    ];
+
+    const cmd = `"${chromePath}" ${lowMemoryFlags.join(' ')} --print-to-pdf="${tmpPdf}" "${tmpHtml}"`;
+    execSync(cmd, { stdio: 'pipe', timeout: 30000, maxBuffer: 10 * 1024 * 1024 });
 
     if (!fs.existsSync(tmpPdf)) {
       throw new Error('Failed to generate PDF from Chrome');

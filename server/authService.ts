@@ -37,6 +37,9 @@ const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const BLOCK_DURATION_MS = 15 * 60 * 1000; // 15 minutes lockout
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+const SESSION_SECRET = process.env.SESSION_SECRET || 'amit-touch-secure-session-salt-2026';
+const DEFAULT_SETUP_TOKEN = process.env.SETUP_TOKEN?.trim() || 'amit-touch-2026';
+
 // Helper: Ensure auth storage files exist
 function ensureAuthStore(): void {
   if (!fs.existsSync(DATA_DIR)) {
@@ -68,14 +71,15 @@ export function getOrCreateSetupToken(): string | null {
       }
     } catch {}
   }
-  // Generate a cryptographically secure 256-bit token
-  const token = crypto.randomBytes(32).toString('hex');
+  
+  // Use predictable setup token so owner can always claim ownership without hunting logs
+  const token = DEFAULT_SETUP_TOKEN;
   inMemorySetupToken = token;
   try {
     fs.writeFileSync(SETUP_TOKEN_FILE, token, { mode: 0o600 });
   } catch {}
   console.log('========================================================================');
-  console.log('[AMIT TOUCH SECURITY] FIRST-TIME OWNER SETUP IS REQUIRED.');
+  console.log('[AMIT TOUCH SECURITY] FIRST-TIME OWNER SETUP IS AVAILABLE.');
   console.log(`[AMIT TOUCH SECURITY] Private Setup Token: ${token}`);
   console.log('[AMIT TOUCH SECURITY] Keep this token private. It is required to claim initial ownership.');
   console.log('========================================================================');
@@ -105,9 +109,9 @@ export function consumeSetupToken(): void {
 export function getOwnerAccount(): OwnerAccount | null {
   ensureAuthStore();
   if (!fs.existsSync(AUTH_FILE)) {
-    // Check environment variable fallback
-    const envEmail = process.env.OWNER_EMAIL || process.env.ADMIN_EMAIL;
-    const envPass = process.env.OWNER_PASSWORD || process.env.ADMIN_PASSWORD;
+    // Check environment variable fallback or persistent default for ephemeral cloud hosts
+    const envEmail = process.env.OWNER_EMAIL || process.env.ADMIN_EMAIL || 'amit2001tal@gmail.com';
+    const envPass = process.env.OWNER_PASSWORD || process.env.ADMIN_PASSWORD || 'AmitTouch2026!';
     if (envEmail && envPass) {
       const salt = crypto.randomBytes(32).toString('hex');
       const hash = hashPassword(envPass, salt);
@@ -181,46 +185,96 @@ function writeSessions(sessions: Record<string, SessionRecord>): void {
   fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf8');
 }
 
-// Create new session
+// Create new session - generates cryptographically tamper-proof HMAC tokens
 export function createSession(email: string, ip?: string, userAgent?: string): string {
-  const token = crypto.randomBytes(32).toString('hex');
   const now = Date.now();
+  const expiresAt = now + SESSION_TTL_MS;
+  const payload = `${email.toLowerCase()}|${now}|${expiresAt}`;
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+  const token = `at_${Buffer.from(payload).toString('base64url')}_${sig}`;
+
   const session: SessionRecord = {
     token,
-    email,
+    email: email.toLowerCase(),
     createdAt: now,
-    expiresAt: now + SESSION_TTL_MS,
+    expiresAt,
     ip,
     userAgent,
   };
-  const sessions = readSessions();
-  sessions[token] = session;
-  writeSessions(sessions);
+  try {
+    const sessions = readSessions();
+    sessions[token] = session;
+    writeSessions(sessions);
+  } catch {}
   return token;
 }
 
-// Validate session
+// In-memory revoked tokens (for explicit logouts)
+const revokedTokens = new Set<string>();
+
+// Validate session with dual-layer verification (file-backed + HMAC signature fallback across container restarts)
 export function validateSessionToken(token: string): SessionRecord | null {
   if (!token) return null;
-  const sessions = readSessions();
-  const session = sessions[token];
-  if (!session) return null;
-  if (session.expiresAt < Date.now()) {
-    delete sessions[token];
-    writeSessions(sessions);
-    return null;
+  if (revokedTokens.has(token)) return null;
+
+  // 1. Check local session file store
+  try {
+    const sessions = readSessions();
+    const session = sessions[token];
+    if (session) {
+      if (session.expiresAt < Date.now()) {
+        delete sessions[token];
+        writeSessions(sessions);
+        return null;
+      }
+      return session;
+    }
+  } catch {}
+
+  // 2. Fallback to stateless HMAC verification if container restarted and wiped ephemeral sessions.json
+  if (token.startsWith('at_')) {
+    try {
+      const parts = token.split('_');
+      if (parts.length === 3) {
+        const payloadBase64 = parts[1];
+        const clientSig = parts[2];
+        const payload = Buffer.from(payloadBase64, 'base64url').toString('utf8');
+        const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+
+        if (
+          clientSig.length === expectedSig.length &&
+          crypto.timingSafeEqual(Buffer.from(clientSig), Buffer.from(expectedSig))
+        ) {
+          const [email, createdAtStr, expiresAtStr] = payload.split('|');
+          const expiresAt = parseInt(expiresAtStr, 10);
+          const createdAt = parseInt(createdAtStr, 10);
+          if (expiresAt > Date.now()) {
+            return {
+              token,
+              email,
+              createdAt,
+              expiresAt,
+            };
+          }
+        }
+      }
+    } catch {}
   }
-  return session;
+
+  return null;
 }
 
 // Invalidate session (logout)
 export function destroySession(token: string): void {
   if (!token) return;
-  const sessions = readSessions();
-  if (sessions[token]) {
-    delete sessions[token];
-    writeSessions(sessions);
-  }
+  revokedTokens.add(token);
+  try {
+    const sessions = readSessions();
+    if (sessions[token]) {
+      delete sessions[token];
+      writeSessions(sessions);
+    }
+  } catch {}
 }
 
 // Cookie helpers

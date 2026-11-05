@@ -98,6 +98,8 @@ interface DocumentsContextType {
 const DocumentsContext = createContext<DocumentsContextType | undefined>(undefined);
 
 const BUSINESS_STORAGE_KEY = 'amit_business_settings';
+const DOCUMENTS_STORAGE_KEY = 'amit_documents_cache';
+const SEQUENCES_STORAGE_KEY = 'amit_sequences_cache';
 
 const DEFAULT_BUSINESS_SETTINGS: BusinessSettings = {
   legalName: 'אמית טאץ׳ בע״מ',
@@ -126,14 +128,32 @@ const DEFAULT_BUSINESS_SETTINGS: BusinessSettings = {
 export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { clients, projects, entries, settings, showToast } = useApp();
 
-  const [documents, setDocuments] = useState<AppDocument[]>([]);
-  const [sequences, setSequences] = useState<SequenceSettings>({
-    isProductionActive: false,
-    paymentRequestNext: 40016,
-    receiptNext: 250016,
-    quoteNext: null,
-    testSequenceNext: 1001,
-    isLocked: false,
+  const [documents, setDocuments] = useState<AppDocument[]>(() => {
+    try {
+      const cached = localStorage.getItem(DOCUMENTS_STORAGE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
+  const [sequences, setSequences] = useState<SequenceSettings>(() => {
+    try {
+      const cached = localStorage.getItem(SEQUENCES_STORAGE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch {}
+    return {
+      isProductionActive: false,
+      paymentRequestNext: 40016,
+      receiptNext: 250016,
+      quoteNext: null,
+      testSequenceNext: 1001,
+      isLocked: false,
+    };
   });
   const [businessSettings, setBusinessSettings] = useState<BusinessSettings>(() => {
     try {
@@ -151,13 +171,28 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [isLoading, setIsLoading] = useState(true);
   const [isTestMode, setIsTestMode] = useState(false);
 
+  // Sync documents and sequences to client localStorage cache
+  useEffect(() => {
+    try {
+      localStorage.setItem(DOCUMENTS_STORAGE_KEY, JSON.stringify(documents));
+    } catch {}
+  }, [documents]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SEQUENCES_STORAGE_KEY, JSON.stringify(sequences));
+    } catch {}
+  }, [sequences]);
+
   // Fetch all documents from server API
   const refreshDocuments = useCallback(async () => {
     try {
       const res = await fetch('/api/documents');
       if (res.ok) {
         const data = await res.json();
-        setDocuments(data.documents || []);
+        if (Array.isArray(data.documents)) {
+          setDocuments(data.documents);
+        }
         if (data.sequences) setSequences(data.sequences);
         if (data.business) {
           setBusinessSettings(data.business);

@@ -36,9 +36,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV CHROME_BIN=/usr/bin/chromium
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV NODE_ENV=production
-ENV NODE_OPTIONS="--max-old-space-size=384"
+ENV NODE_OPTIONS="--max-old-space-size=192"
 ENV PORT=3000
 ENV HOST=0.0.0.0
+ENV OWNER_EMAIL="amit2001tal@gmail.com"
+ENV OWNER_PASSWORD="AmitTouch2026!"
+ENV SETUP_TOKEN="amit-touch-2026"
+ENV SESSION_SECRET="amit-touch-production-secure-session-salt-2026"
 
 # Install pnpm in production runner
 RUN corepack enable && corepack prepare pnpm@latest --activate
