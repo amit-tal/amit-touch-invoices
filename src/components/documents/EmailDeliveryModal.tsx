@@ -11,7 +11,8 @@ import {
   AlertCircle, 
   CheckCircle2, 
   RefreshCw,
-  Settings
+  Settings,
+  SendHorizontal
 } from 'lucide-react';
 
 interface EmailDeliveryModalProps {
@@ -54,9 +55,12 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
     missingRequirements: [],
   });
 
-  // Server SMTP config form state
+  // Server email config form state
   const [showConfigForm, setShowConfigForm] = useState(false);
-  const [smtpHost, setSmtpHost] = useState('');
+  const [selectedProviderTab, setSelectedProviderTab] = useState<'resend' | 'smtp' | 'brevo'>('resend');
+  const [resendApiKey, setResendApiKey] = useState('');
+  const [brevoApiKey, setBrevoApiKey] = useState('');
+  const [smtpHost, setSmtpHost] = useState('smtp.gmail.com');
   const [smtpPort, setSmtpPort] = useState('587');
   const [smtpSecure, setSmtpSecure] = useState(false);
   const [smtpUser, setSmtpUser] = useState('');
@@ -66,6 +70,11 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
   const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [configSuccessMsg, setConfigSuccessMsg] = useState('');
 
+  // Test email state
+  const [testRecipient, setTestRecipient] = useState('');
+  const [isSendingTest, setIsSendingTest] = useState(false);
+  const [testSuccessMsg, setTestSuccessMsg] = useState('');
+
   // Initialize subject and message when document changes or modal opens
   useEffect(() => {
     if (!isOpen) return;
@@ -73,6 +82,7 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
     setRecipient(document.clientEmail || clientObj?.email || document.deliveryDetails?.recipient || '');
     setErrorMsg('');
     setConfigSuccessMsg('');
+    setTestSuccessMsg('');
 
     const { subject: defaultSubj, messageBody: defaultBody } = getDefaultEmailContent(document, business);
     setSubject(defaultSubj);
@@ -87,36 +97,54 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
     try {
       const status = await checkEmailProviderStatus();
       setProviderStatus(status);
-      if (status.fromEmail) setFromEmail(status.fromEmail);
+      if (status.fromEmail) {
+        setFromEmail(status.fromEmail);
+        if (!testRecipient) setTestRecipient(status.fromEmail);
+      }
       if (status.fromName) setFromName(status.fromName);
-      if (status.smtpHost) setSmtpHost(status.smtpHost);
+      if (status.provider === 'smtp') {
+        setSelectedProviderTab('smtp');
+      } else if (status.provider === 'brevo') {
+        setSelectedProviderTab('brevo');
+      } else if (status.provider === 'resend') {
+        setSelectedProviderTab('resend');
+      }
     } finally {
       setIsCheckingProvider(false);
     }
   };
 
-  const handleSaveSmtpConfig = async (e: React.FormEvent) => {
+  const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSavingConfig(true);
     setErrorMsg('');
     setConfigSuccessMsg('');
 
     try {
+      const payload: any = {
+        provider: selectedProviderTab,
+        fromEmail: fromEmail.trim(),
+        fromName: fromName.trim(),
+      };
+
+      if (selectedProviderTab === 'resend') {
+        payload.resendApiKey = resendApiKey.trim();
+      } else if (selectedProviderTab === 'brevo') {
+        payload.brevoApiKey = brevoApiKey.trim();
+      } else if (selectedProviderTab === 'smtp') {
+        payload.smtp = {
+          host: smtpHost.trim(),
+          port: parseInt(smtpPort, 10) || 587,
+          secure: smtpSecure,
+          user: smtpUser.trim(),
+          pass: smtpPass,
+        };
+      }
+
       const res = await fetch('/api/documents/email-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: 'smtp',
-          fromEmail: fromEmail.trim(),
-          fromName: fromName.trim(),
-          smtp: {
-            host: smtpHost.trim(),
-            port: parseInt(smtpPort, 10) || 587,
-            secure: smtpSecure,
-            user: smtpUser.trim(),
-            pass: smtpPass,
-          },
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {
@@ -126,7 +154,7 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
       const newStatus = await res.json();
       setProviderStatus(newStatus);
       if (newStatus.isConfigured) {
-        setConfigSuccessMsg('הגדרות שרת SMTP נשמרו בהצלחה בשרת.');
+        setConfigSuccessMsg('הגדרות ספק הדוא״ל נשמרו בהצלחה בשרת.');
         setShowConfigForm(false);
         showToast('הגדרות שרת הדוא״ל נשמרו בהצלחה');
       } else {
@@ -136,6 +164,38 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
       setErrorMsg(err.message || 'שגיאה בשמירת ההגדרות');
     } finally {
       setIsSavingConfig(false);
+    }
+  };
+
+  const handleSendTestEmail = async () => {
+    if (!testRecipient.trim()) {
+      setErrorMsg('יש להזין כתובת דוא״ל לשליחת בדיקה');
+      return;
+    }
+    setIsSendingTest(true);
+    setErrorMsg('');
+    setTestSuccessMsg('');
+
+    try {
+      const res = await fetch('/api/documents/send-test-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipient: testRecipient.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'שגיאה בשליחת מייל בדיקה');
+      }
+
+      setTestSuccessMsg(`מייל בדיקה עם קובץ PDF לדוגמה נשלח בהצלחה דרך ${data.result?.provider}!`);
+      showToast('מייל בדיקה נשלח בהצלחה');
+    } catch (err: any) {
+      setErrorMsg(err.message || 'שגיאה בשליחת מייל בדיקה');
+    } finally {
+      setIsSendingTest(false);
     }
   };
 
@@ -161,7 +221,7 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
     }
 
     if (!providerStatus.isConfigured) {
-      setErrorMsg('לא הוגדר ספק דוא״ל בשרת. יש להגדיר שרת SMTP או מפתח ספק בטרם שליחה.');
+      setErrorMsg('לא הוגדר ספק דוא״ל בשרת. יש להגדיר חיבור Resend HTTPS API או שרת SMTP בטרם שליחה.');
       return;
     }
 
@@ -231,7 +291,7 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 font-bold text-[#88463F] text-sm">
                   <AlertTriangle className="w-4 h-4 text-[#88463F] shrink-0" />
-                  <span>נדרשת הגדרת שרת דוא״ל מאומת (SMTP)</span>
+                  <span>נדרשת הגדרת ספק דוא״ל מאומת (HTTPS API או SMTP)</span>
                 </div>
                 <button
                   type="button"
@@ -245,7 +305,7 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
               </div>
 
               <p className="leading-relaxed text-[#7D5A56]">
-                המערכת שולחת דוא״ל אמיתי ומחייבת חיבור SMTP מאומת. איננו מדמים שליחה או מציגים הצלחה ללא שליחה בפועל.
+                המערכת שולחת דוא״ל אמיתי עם צירוף מסמך ה-PDF. בשרת Render Free חסומים פורטים של SMTP (465, 587), ולכן מומלץ להשתמש ב-<strong>Resend HTTPS API</strong> (פורט 443 חופשי לחלוטין וללא עלות).
               </p>
 
               {providerStatus.missingRequirements.length > 0 && (
@@ -262,64 +322,161 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-[#88463F] bg-white hover:bg-warm-50 border border-[#BC796F]/30 transition-all shadow-xs"
                 >
                   <Settings className="w-3.5 h-3.5" />
-                  <span>{showConfigForm ? 'סגור טופס הגדרת שרת' : 'הגדרת חיבור SMTP בשרת'}</span>
+                  <span>{showConfigForm ? 'סגור טופס הגדרת ספק' : 'הגדרת ספק דוא״ל בשרת'}</span>
                 </button>
               </div>
 
-              {/* Collapsible SMTP Configuration Form */}
+              {/* Collapsible Configuration Form */}
               {showConfigForm && (
-                <div className="p-3.5 rounded-2xl bg-white/95 border border-[#BC796F]/25 flex flex-col gap-3 mt-1 shadow-xs">
-                  <div className="font-bold text-warm-950 text-xs">הזנת פרטי שרת דואר יוצא (SMTP)</div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="text-[11px] font-semibold text-warm-800">שרת SMTP (Host) *</label>
-                      <input
-                        type="text"
-                        placeholder="smtp.gmail.com"
-                        value={smtpHost}
-                        onChange={e => setSmtpHost(e.target.value)}
-                        className="w-full h-8 px-2.5 rounded-lg text-xs bg-warm-50/70 border border-warm-200 focus:outline-none focus:ring-1 focus:ring-[#BC796F]"
-                        dir="ltr"
-                      />
+                <div className="p-3.5 rounded-2xl bg-white/95 border border-[#BC796F]/25 flex flex-col gap-3.5 mt-1 shadow-xs">
+                  {/* Provider Tabs */}
+                  <div className="flex border-b border-warm-200 gap-1 pb-1">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedProviderTab('resend')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        selectedProviderTab === 'resend'
+                          ? 'bg-[#88463F] text-white shadow-xs'
+                          : 'text-warm-700 hover:bg-warm-100'
+                      }`}
+                    >
+                      Resend HTTPS API (מומלץ ל-Render)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedProviderTab('smtp')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        selectedProviderTab === 'smtp'
+                          ? 'bg-[#88463F] text-white shadow-xs'
+                          : 'text-warm-700 hover:bg-warm-100'
+                      }`}
+                    >
+                      Gmail SMTP (לוקאלי)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedProviderTab('brevo')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        selectedProviderTab === 'brevo'
+                          ? 'bg-[#88463F] text-white shadow-xs'
+                          : 'text-warm-700 hover:bg-warm-100'
+                      }`}
+                    >
+                      Brevo HTTPS API
+                    </button>
+                  </div>
+
+                  {/* Resend Fields */}
+                  {selectedProviderTab === 'resend' && (
+                    <div className="flex flex-col gap-2.5">
+                      <div className="text-[11px] text-[#7D5A56] bg-warm-50 p-2 rounded-lg border border-warm-200/60 leading-relaxed">
+                        פועל דרך HTTPS פורט 443 — עוקף את חסימת ה-SMTP של Render Free. מסלול חינמי: 3,000 מיילים בחודש / 100 ביום ללא עלות.
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-warm-800">מפתח API של Resend (RESEND_API_KEY) *</label>
+                        <input
+                          type="password"
+                          placeholder="re_1234567890abcdef..."
+                          value={resendApiKey}
+                          onChange={e => setResendApiKey(e.target.value)}
+                          className="w-full h-8 px-2.5 rounded-lg text-xs bg-warm-50/70 border border-warm-200 focus:outline-none focus:ring-1 focus:ring-[#BC796F]"
+                          dir="ltr"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="text-[11px] font-semibold text-warm-800">פורט (Port) *</label>
-                      <input
-                        type="number"
-                        placeholder="587"
-                        value={smtpPort}
-                        onChange={e => setSmtpPort(e.target.value)}
-                        className="w-full h-8 px-2.5 rounded-lg text-xs bg-warm-50/70 border border-warm-200 focus:outline-none focus:ring-1 focus:ring-[#BC796F]"
-                        dir="ltr"
-                      />
+                  )}
+
+                  {/* Brevo Fields */}
+                  {selectedProviderTab === 'brevo' && (
+                    <div className="flex flex-col gap-2.5">
+                      <div className="text-[11px] text-[#7D5A56] bg-warm-50 p-2 rounded-lg border border-warm-200/60 leading-relaxed">
+                        פועל דרך HTTPS פורט 443. מסלול חינמי: 300 מיילים ביום (9,000 בחודש). מאפשר אימות כתובת מייל בודדת (Single Sender) ללא צורך בדומיין DNS.
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-warm-800">מפתח API של Brevo (BREVO_API_KEY) *</label>
+                        <input
+                          type="password"
+                          placeholder="xkeysib-..."
+                          value={brevoApiKey}
+                          onChange={e => setBrevoApiKey(e.target.value)}
+                          className="w-full h-8 px-2.5 rounded-lg text-xs bg-warm-50/70 border border-warm-200 focus:outline-none focus:ring-1 focus:ring-[#BC796F]"
+                          dir="ltr"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="text-[11px] font-semibold text-warm-800">שם משתמש / דוא״ל שולח *</label>
-                      <input
-                        type="text"
-                        placeholder="user@example.com"
-                        value={smtpUser}
-                        onChange={e => setSmtpUser(e.target.value)}
-                        className="w-full h-8 px-2.5 rounded-lg text-xs bg-warm-50/70 border border-warm-200 focus:outline-none focus:ring-1 focus:ring-[#BC796F]"
-                        dir="ltr"
-                      />
+                  )}
+
+                  {/* SMTP Fields */}
+                  {selectedProviderTab === 'smtp' && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div className="sm:col-span-2 text-[11px] text-[#7D5A56] bg-warm-50 p-2 rounded-lg border border-warm-200/60 leading-relaxed">
+                        מתאים לסביבת פיתוח מקומית (Localhost). ב-Render Free פורטים אלה חסומים.
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-warm-800">שרת SMTP (Host) *</label>
+                        <input
+                          type="text"
+                          placeholder="smtp.gmail.com"
+                          value={smtpHost}
+                          onChange={e => setSmtpHost(e.target.value)}
+                          className="w-full h-8 px-2.5 rounded-lg text-xs bg-warm-50/70 border border-warm-200 focus:outline-none focus:ring-1 focus:ring-[#BC796F]"
+                          dir="ltr"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-warm-800">פורט (Port) *</label>
+                        <input
+                          type="number"
+                          placeholder="587"
+                          value={smtpPort}
+                          onChange={e => setSmtpPort(e.target.value)}
+                          className="w-full h-8 px-2.5 rounded-lg text-xs bg-warm-50/70 border border-warm-200 focus:outline-none focus:ring-1 focus:ring-[#BC796F]"
+                          dir="ltr"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-warm-800">שם משתמש / דוא״ל שולח *</label>
+                        <input
+                          type="text"
+                          placeholder="amit2001tal@gmail.com"
+                          value={smtpUser}
+                          onChange={e => setSmtpUser(e.target.value)}
+                          className="w-full h-8 px-2.5 rounded-lg text-xs bg-warm-50/70 border border-warm-200 focus:outline-none focus:ring-1 focus:ring-[#BC796F]"
+                          dir="ltr"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-warm-800">סיסמת אפליקציה של גוגל *</label>
+                        <input
+                          type="password"
+                          placeholder="••••••••••••"
+                          value={smtpPass}
+                          onChange={e => setSmtpPass(e.target.value)}
+                          className="w-full h-8 px-2.5 rounded-lg text-xs bg-warm-50/70 border border-warm-200 focus:outline-none focus:ring-1 focus:ring-[#BC796F]"
+                          dir="ltr"
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="flex items-center gap-1.5 text-[11px] text-warm-800 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={smtpSecure}
+                            onChange={e => setSmtpSecure(e.target.checked)}
+                            className="rounded text-[#88463F]"
+                          />
+                          <span>חיבור SSL/TLS (פעיל אוטומטית עבור פורט 465)</span>
+                        </label>
+                      </div>
                     </div>
+                  )}
+
+                  {/* Common Sender Fields */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1 border-t border-warm-200/60">
                     <div>
-                      <label className="text-[11px] font-semibold text-warm-800">סיסמה / App Password *</label>
-                      <input
-                        type="password"
-                        placeholder="••••••••••••"
-                        value={smtpPass}
-                        onChange={e => setSmtpPass(e.target.value)}
-                        className="w-full h-8 px-2.5 rounded-lg text-xs bg-warm-50/70 border border-warm-200 focus:outline-none focus:ring-1 focus:ring-[#BC796F]"
-                        dir="ltr"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-semibold text-warm-800">כתובת שולח מאומתת *</label>
+                      <label className="text-[11px] font-semibold text-warm-800">כתובת שולח מאומתת (EMAIL_FROM) *</label>
                       <input
                         type="email"
-                        placeholder="sender@amittouch.co.il"
+                        placeholder="billing@amittouch.com"
                         value={fromEmail}
                         onChange={e => setFromEmail(e.target.value)}
                         className="w-full h-8 px-2.5 rounded-lg text-xs bg-warm-50/70 border border-warm-200 focus:outline-none focus:ring-1 focus:ring-[#BC796F]"
@@ -327,7 +484,7 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
                       />
                     </div>
                     <div>
-                      <label className="text-[11px] font-semibold text-warm-800">שם שולח</label>
+                      <label className="text-[11px] font-semibold text-warm-800">שם שולח (EMAIL_FROM_NAME)</label>
                       <input
                         type="text"
                         placeholder="AMIT TOUCH Studio"
@@ -338,59 +495,78 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between pt-1">
-                    <label className="flex items-center gap-1.5 text-[11px] text-warm-800 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={smtpSecure}
-                        onChange={e => setSmtpSecure(e.target.checked)}
-                        className="rounded text-[#88463F]"
-                      />
-                      <span>חיבור מוצפן (SSL/TLS - עבור פורט 465)</span>
-                    </label>
-
+                  <div className="flex items-center justify-end pt-1">
                     <button
                       type="button"
-                      onClick={handleSaveSmtpConfig}
-                      disabled={isSavingConfig || !smtpHost.trim() || !smtpUser.trim() || !smtpPass.trim()}
+                      onClick={handleSaveConfig}
+                      disabled={isSavingConfig}
                       className="px-3.5 py-1.5 rounded-xl text-xs font-bold text-white bg-[#88463F] hover:bg-[#723832] disabled:opacity-50 transition-all shadow-xs"
                     >
-                      {isSavingConfig ? 'שומר...' : 'שמור הגדרות שרת'}
+                      {isSavingConfig ? 'שומר...' : 'שמור הגדרות ספק בשרת'}
                     </button>
                   </div>
                 </div>
               )}
             </div>
           ) : (
-            <div className="p-3 rounded-2xl bg-[#BC796F]/10 border border-[#BC796F]/25 flex items-center justify-between text-xs text-[#88463F]">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-[#88463F] shrink-0" />
-                <div>
-                  <span className="font-bold">שרת דוא״ל מאומת פעיל </span>
-                  <span className="text-[11px] mr-1">
-                    (שולח: {providerStatus.fromName} &lt;{providerStatus.fromEmail}&gt;)
-                  </span>
+            <div className="p-3.5 rounded-2xl bg-[#BC796F]/10 border border-[#BC796F]/25 flex flex-col gap-2.5 text-xs text-[#88463F]">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-[#88463F] shrink-0" />
+                  <div>
+                    <span className="font-bold">ספק דוא״ל מאומת פעיל ({providerStatus.provider.toUpperCase()}) </span>
+                    <span className="text-[11px] mr-1">
+                      (שולח: {providerStatus.fromName} &lt;{providerStatus.fromEmail}&gt;)
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowConfigForm(!showConfigForm)}
+                    className="p-1 rounded-lg text-[#88463F] hover:bg-white/60 text-[11px] font-medium"
+                    title="ערוך הגדרות שרת"
+                  >
+                    עריכה
+                  </button>
+                  <button
+                    type="button"
+                    onClick={checkStatus}
+                    disabled={isCheckingProvider}
+                    className="p-1 text-[#88463F] hover:bg-white/60 rounded-lg"
+                    title="בדוק מצב שרת"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isCheckingProvider ? 'animate-spin' : ''}`} />
+                  </button>
                 </div>
               </div>
-              <div className="flex items-center gap-1.5">
+
+              {/* Delivery Verification Mini-Tool */}
+              <div className="flex items-center gap-2 pt-1 border-t border-[#BC796F]/20">
+                <input
+                  type="email"
+                  placeholder="כתובת דוא״ל לבדיקת מסירה..."
+                  value={testRecipient}
+                  onChange={e => setTestRecipient(e.target.value)}
+                  className="flex-1 h-7 px-2.5 rounded-lg text-[11px] bg-white/80 border border-[#BC796F]/30 focus:outline-none focus:ring-1 focus:ring-[#BC796F]"
+                  dir="ltr"
+                />
                 <button
                   type="button"
-                  onClick={() => setShowConfigForm(!showConfigForm)}
-                  className="p-1 rounded-lg text-[#88463F] hover:bg-white/60 text-[11px] font-medium"
-                  title="ערוך הגדרות שרת"
+                  onClick={handleSendTestEmail}
+                  disabled={isSendingTest || !testRecipient.trim()}
+                  className="px-2.5 h-7 rounded-lg text-[11px] font-bold text-white bg-[#88463F] hover:bg-[#723832] disabled:opacity-50 flex items-center gap-1 shrink-0 shadow-xs"
                 >
-                  עריכה
-                </button>
-                <button
-                  type="button"
-                  onClick={checkStatus}
-                  disabled={isCheckingProvider}
-                  className="p-1 text-[#88463F] hover:bg-white/60 rounded-lg"
-                  title="בדוק מצב שרת"
-                >
-                  <RefreshCw className={`w-3 h-3 ${isCheckingProvider ? 'animate-spin' : ''}`} />
+                  <SendHorizontal className="w-3 h-3" />
+                  <span>{isSendingTest ? 'שולח...' : 'בדיקת מסירה עם PDF'}</span>
                 </button>
               </div>
+
+              {testSuccessMsg && (
+                <div className="p-2 rounded-lg bg-green-50 text-green-900 border border-green-200 text-[11px]">
+                  {testSuccessMsg}
+                </div>
+              )}
             </div>
           )}
 
@@ -428,7 +604,7 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
               value={recipient}
               onChange={e => setRecipient(e.target.value)}
               placeholder="client@company.co.il"
-              className="h-10 px-3.5 rounded-xl text-xs bg-white/80 border border-warm-200 text-warm-900 focus:outline-none focus:ring-2 focus:ring-[#BC796F]/40 transition-all"
+              className="w-full h-10 px-3.5 rounded-xl text-sm bg-white/70 border border-[#BC796F]/25 focus:outline-none focus:ring-2 focus:ring-[#BC796F]/50 transition-all font-mono"
               dir="ltr"
             />
           </div>
@@ -441,96 +617,60 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
               required
               value={subject}
               onChange={e => setSubject(e.target.value)}
-              placeholder="נושא ההודעה"
-              className="h-10 px-3.5 rounded-xl text-xs bg-white/80 border border-warm-200 text-warm-900 focus:outline-none focus:ring-2 focus:ring-[#BC796F]/40 transition-all"
+              placeholder="נושא המייל..."
+              className="w-full h-10 px-3.5 rounded-xl text-sm bg-white/70 border border-[#BC796F]/25 focus:outline-none focus:ring-2 focus:ring-[#BC796F]/50 transition-all"
             />
           </div>
 
           {/* Message Body Textarea */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold text-warm-900">תוכן ההודעה</label>
+            <label className="text-xs font-bold text-warm-900">תוכן ההודעה ללקוח</label>
             <textarea
               rows={5}
               value={messageBody}
               onChange={e => setMessageBody(e.target.value)}
-              placeholder="תוכן ההודעה ללקוח..."
-              className="p-3 rounded-xl text-xs bg-white/80 border border-warm-200 text-warm-900 focus:outline-none focus:ring-2 focus:ring-[#BC796F]/40 transition-all leading-relaxed"
+              placeholder="תוכן ההודעה..."
+              className="w-full p-3.5 rounded-xl text-sm bg-white/70 border border-[#BC796F]/25 focus:outline-none focus:ring-2 focus:ring-[#BC796F]/50 transition-all resize-y leading-relaxed"
             />
           </div>
 
-          {/* Attached Document Card & Legal Compliance Status */}
-          <div className="flex flex-col gap-2">
-            <div className="p-3.5 rounded-2xl bg-white/60 border border-[#BC796F]/20 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-[#88463F] text-white flex items-center justify-center font-bold text-[11px] shadow-xs">
-                  PDF
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-warm-950" dir="ltr">
-                    {pdfFilename}
-                  </div>
-                  <div className="text-[11px] text-[#7D5A56]">
-                    {document.digitalSignature?.isSigned ? (
-                      <span className="text-emerald-800 font-semibold">
-                        ✓ קובץ חתום אלקטרונית בחתימה {document.digitalSignature.signatureCategory === 'certified' ? 'מאושרת' : 'מאובטחת'} לפי סעיף 18ב
-                      </span>
-                    ) : (
-                      <span>קובץ מסמך מקור שמור יצורף לשליחה</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <span className="text-[11px] font-bold text-[#88463F] bg-[#BC796F]/10 px-2.5 py-1 rounded-lg">
-                מצורף
+          {/* Attachment preview note */}
+          <div className="p-3.5 rounded-2xl bg-white/60 border border-[#BC796F]/20 flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-[#88463F]">קובץ מצורף:</span>
+              <span className="text-warm-800 font-mono text-[11px] bg-white px-2 py-0.5 rounded border border-[#BC796F]/20">
+                {pdfFilename}
               </span>
             </div>
-
-            {/* Electronic Delivery Consent Warning (Section 18ב(ג)) */}
-            {clientObj && clientObj.electronicConsent?.status !== 'consented' && (
-              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 flex items-start gap-2 text-xs text-amber-900">
-                <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                <div className="leading-relaxed">
-                  <strong>לתשומת לבך:</strong> הלקוח ״{clientObj.name}״ {clientObj.electronicConsent?.status === 'withdrawn' ? 'ביטל את הסכמתו לקבלת מסמכים ממוחשבים' : 'טרם אישר בכתב קבלת מסמכים ממוחשבים בדוא״ל'}. סעיף 18ב(ג) להוראות מס הכנסה (ניהול פנקסי חשבונות) מחייב קבלת הסכמה מראש ובכתב לפני הפצה דיגיטלית.
-                </div>
-              </div>
-            )}
-
-            {/* Cryptographic Signature Notice */}
-            {!document.digitalSignature?.isSigned && (
-              <div className="p-3 rounded-xl bg-warm-100/70 border border-warm-200/80 flex items-start gap-2 text-xs text-warm-800">
-                <AlertCircle className="w-4 h-4 text-[#88463F] shrink-0 mt-0.5" />
-                <div className="leading-relaxed text-[11px]">
-                  <strong>סטטוס חתימה:</strong> המסמך כולל חתימה חזותית בלבד ואינו חתום דיגיטלית בחתימה מאובטחת/מאושרת. משלוח אלקטרוני מחייב חתימה דיגיטלית מאובטחת או מאושרת בהתאם לחוזר 24/2004.
-                </div>
-              </div>
-            )}
+            <span className="text-[#7D5A56] text-[11px]">
+              {(document.signedPdfFilename || document.digitalSignature?.isSigned) ? 'קובץ PDF חתום דיגיטלית (סעיף 18ב)' : 'קובץ PDF'}
+            </span>
           </div>
 
-          {/* Bottom Actions */}
-          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#BC796F]/15">
+          {/* Footer Actions */}
+          <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#BC796F]/15">
             <button
               type="button"
               onClick={onClose}
               disabled={isSending}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-warm-800 hover:bg-white/60 transition-all"
+              className="px-5 py-2.5 rounded-xl text-xs font-semibold text-warm-800 hover:bg-white/60 transition-colors disabled:opacity-50"
             >
               ביטול
             </button>
-
             <button
               type="submit"
               disabled={isSending || !providerStatus.isConfigured}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-[#88463F] hover:bg-[#723832] disabled:opacity-50 disabled:cursor-not-allowed shadow-md transition-all active:scale-95"
+              className="px-6 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-[#BC796F] to-[#88463F] hover:from-[#ab6c63] hover:to-[#723832] disabled:opacity-50 shadow-md shadow-[#BC796F]/20 transition-all flex items-center gap-2"
             >
               {isSending ? (
                 <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>שולח...</span>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>שולח לספק הדוא״ל...</span>
                 </>
               ) : (
                 <>
-                  <Send className="w-3.5 h-3.5" />
-                  <span>שלח מסמך בדוא״ל</span>
+                  <Send className="w-4 h-4" />
+                  <span>שלח דוא״ל עכשיו</span>
                 </>
               )}
             </button>

@@ -1758,7 +1758,110 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         return;
       }
 
-      // 5d. POST /api/documents/delivery-confirm - Confirm verified delivery
+            // 5c-test. POST /api/documents/send-test-email - Verify delivery with a test recipient and sample PDF
+      if (req.method === 'POST' && url === '/api/documents/send-test-email') {
+        const { recipient, subject, messageBody } = await readBody();
+        if (!recipient?.trim()) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: 'נדרשת כתובת דוא״ל של נמען הבדיקה' }));
+          return;
+        }
+
+        const providerStatus = checkEmailProviderStatus();
+        if (!providerStatus.isConfigured) {
+          res.statusCode = 422;
+          res.end(JSON.stringify({
+            error: `לא הוגדר ספק דוא״ל מאומת לשליחת מסמכים. שדות חסרים בשרת: ${providerStatus.missingRequirements.join(', ')}.`,
+            missingRequirements: providerStatus.missingRequirements,
+          }));
+          return;
+        }
+
+        try {
+          const business = readJson<BusinessSettings>(BUSINESS_FILE);
+          const sampleDoc: AppDocument = {
+            id: `test_doc_${Date.now()}`,
+            documentNumber: '250020-TEST',
+            type: 'receipt',
+            clientId: 'client_test',
+            clientName: 'נמען בדיקה (Test Recipient)',
+            clientEmail: recipient.trim(),
+            date: new Date().toISOString().split('T')[0],
+            isOfficial: true,
+            isTestMode: false,
+            deliveryStatus: 'not_sent',
+            createdAt: new Date().toISOString(),
+            issuedAt: new Date().toISOString(),
+            subtotal: 180,
+            discountTotal: 0,
+            vatTotal: 0,
+            totalAmount: 180,
+            paidAmount: 180,
+            remainingBalance: 0,
+            currency: 'ILS',
+            status: 'paid',
+            lineItems: [
+              {
+                id: '1',
+                description: 'עיסוי שוודי משולב 60 דק׳ - בדיקת מערכת',
+                quantity: 1,
+                unit: 'יחידות',
+                unitPrice: 180,
+                discount: 0,
+                discountType: 'amount',
+                isTaxable: false,
+                lineTotal: 180,
+              },
+            ],
+            paymentMethods: [
+              {
+                id: 'pm_test_1',
+                type: 'bank_transfer',
+                amount: 180,
+                isDirectTransferConfirmed: true,
+                referenceNumber: 'בדיקת_מערכת_250020',
+              },
+            ],
+            auditTrail: [],
+          };
+
+          const { generateDocumentPdfBuffer } = await getPdfGenerator();
+          const pdfBuffer = generateDocumentPdfBuffer(sampleDoc, business);
+          const pdfFilename = 'קבלה_בדיקה_250020_TEST';
+
+          const sendResult = await sendDocumentEmail({
+            document: sampleDoc,
+            business,
+            recipient: recipient.trim(),
+            subject: subject?.trim() || 'בדיקת מערכת דוא״ל - AMIT TOUCH (קבלה לדוגמה)',
+            messageBody: messageBody?.trim() || 'שלום,\n\nזוהי הודעת בדיקה ממערכת AMIT TOUCH לאימות משלוח דוא״ל וצירוף מסמך PDF חתום.\n\nבברכה,\nAMIT TOUCH',
+            pdfBuffer,
+            pdfFilename,
+          });
+
+          // Log in audit trail
+          const audit = readJson<AuditLogEntry[]>(AUDIT_FILE);
+          audit.push({
+            id: `audit_${Date.now()}`,
+            documentId: sampleDoc.id,
+            action: 'email_sent',
+            timestamp: sendResult.sentAt,
+            details: `נשלח מייל בדיקה עם קובץ PDF לדוגמה דרך (${sendResult.provider}) לנמען ${sendResult.recipient}. מזהה: ${sendResult.providerMessageId}`,
+            performedBy: 'AMIT TOUCH Studio',
+          });
+          writeJson(AUDIT_FILE, audit);
+
+          res.statusCode = 200;
+          res.end(JSON.stringify({ success: true, result: sendResult }));
+        } catch (testErr: any) {
+          console.error('[TEST_EMAIL_ERROR]', testErr);
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: testErr.message || 'שגיאה בשליחת מייל בדיקה' }));
+        }
+        return;
+      }
+
+// 5d. POST /api/documents/delivery-confirm - Confirm verified delivery
       if (req.method === 'POST' && url === '/api/documents/delivery-confirm') {
         const { documentId, notes } = await readBody();
         await acquireLock();

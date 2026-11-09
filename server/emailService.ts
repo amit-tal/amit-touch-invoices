@@ -6,8 +6,10 @@ import type { AppDocument, BusinessSettings } from '../src/types/documents.ts';
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const EMAIL_CONFIG_FILE = path.join(DATA_DIR, 'emailConfig.json');
 
+export type EmailProviderType = 'resend' | 'brevo' | 'sendgrid' | 'smtp' | 'none';
+
 export interface EmailConfig {
-  provider: 'smtp' | 'resend' | 'sendgrid' | 'none';
+  provider: EmailProviderType;
   fromEmail: string;
   fromName: string;
   smtp?: {
@@ -18,6 +20,7 @@ export interface EmailConfig {
     pass: string;
   };
   resendApiKey?: string;
+  brevoApiKey?: string;
   sendgridApiKey?: string;
 }
 
@@ -25,7 +28,7 @@ export interface EmailConfig {
 const inFlightSends = new Set<string>();
 
 /**
- * Load email configuration from data/emailConfig.json or environment variables
+ * Load email configuration from environment variables or data/emailConfig.json
  */
 export function getEmailConfig(): EmailConfig {
   let fileConfig: Partial<EmailConfig> = {};
@@ -37,35 +40,59 @@ export function getEmailConfig(): EmailConfig {
     }
   }
 
-  const envSmtpHost = process.env.SMTP_HOST;
-  const envSmtpPort = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : undefined;
-  const envSmtpUser = process.env.SMTP_USER;
-  const envSmtpPass = process.env.SMTP_PASS;
-  const envFromEmail = process.env.EMAIL_FROM || fileConfig.fromEmail || '';
-  const envFromName = process.env.EMAIL_FROM_NAME || fileConfig.fromName || 'AMIT TOUCH Studio';
+  const envProvider = (process.env.EMAIL_PROVIDER || '').trim().toLowerCase() as EmailProviderType;
+  const envResendApiKey = process.env.RESEND_API_KEY?.trim();
+  const envBrevoApiKey = process.env.BREVO_API_KEY?.trim();
+  const envSendgridApiKey = process.env.SENDGRID_API_KEY?.trim();
 
-  if (envSmtpHost && envSmtpUser && envSmtpPass && envFromEmail) {
-    return {
-      provider: 'smtp',
-      fromEmail: envFromEmail,
-      fromName: envFromName,
-      smtp: {
-        host: envSmtpHost,
-        port: envSmtpPort || 587,
-        secure: process.env.SMTP_SECURE === 'true',
-        user: envSmtpUser,
-        pass: envSmtpPass,
-      },
-    };
+  const envSmtpHost = process.env.SMTP_HOST?.trim();
+  const envSmtpPort = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : undefined;
+  const envSmtpUser = process.env.SMTP_USER?.trim();
+  const envSmtpPass = process.env.SMTP_PASS?.trim();
+  const envSmtpSecure = process.env.SMTP_SECURE === 'true' || (envSmtpPort === 465);
+
+  const envFromEmail = process.env.EMAIL_FROM?.trim() || fileConfig.fromEmail || '';
+  const envFromName = process.env.EMAIL_FROM_NAME?.trim() || fileConfig.fromName || 'AMIT TOUCH';
+
+  const resendApiKey = envResendApiKey || fileConfig.resendApiKey || '';
+  const brevoApiKey = envBrevoApiKey || fileConfig.brevoApiKey || '';
+  const sendgridApiKey = envSendgridApiKey || fileConfig.sendgridApiKey || '';
+
+  // Smart provider resolution:
+  // 1. Explicit EMAIL_PROVIDER environment variable takes precedence
+  // 2. Otherwise HTTPS API key present (Resend -> Brevo -> SendGrid)
+  // 3. Otherwise SMTP environment variables
+  // 4. Otherwise stored fileConfig
+  let provider: EmailProviderType = 'none';
+
+  if (envProvider && ['resend', 'brevo', 'sendgrid', 'smtp', 'none'].includes(envProvider)) {
+    provider = envProvider;
+  } else if (resendApiKey) {
+    provider = 'resend';
+  } else if (brevoApiKey) {
+    provider = 'brevo';
+  } else if (sendgridApiKey) {
+    provider = 'sendgrid';
+  } else if (envSmtpHost && envSmtpUser && envSmtpPass) {
+    provider = 'smtp';
+  } else if (fileConfig.provider && fileConfig.provider !== 'none') {
+    provider = fileConfig.provider;
   }
 
   return {
-    provider: fileConfig.provider || 'none',
-    fromEmail: fileConfig.fromEmail || '',
-    fromName: fileConfig.fromName || 'AMIT TOUCH Studio',
-    smtp: fileConfig.smtp,
-    resendApiKey: fileConfig.resendApiKey,
-    sendgridApiKey: fileConfig.sendgridApiKey,
+    provider,
+    fromEmail: envFromEmail,
+    fromName: envFromName,
+    resendApiKey,
+    brevoApiKey,
+    sendgridApiKey,
+    smtp: {
+      host: envSmtpHost || fileConfig.smtp?.host || '',
+      port: envSmtpPort || fileConfig.smtp?.port || 587,
+      secure: envSmtpSecure ?? (fileConfig.smtp?.secure ?? false),
+      user: envSmtpUser || fileConfig.smtp?.user || '',
+      pass: envSmtpPass || fileConfig.smtp?.pass || '',
+    },
   };
 }
 
@@ -81,7 +108,7 @@ export function saveEmailConfig(config: EmailConfig): void {
 
 export interface EmailProviderStatus {
   isConfigured: boolean;
-  provider: 'smtp' | 'resend' | 'sendgrid' | 'none';
+  provider: EmailProviderType;
   fromEmail?: string;
   fromName?: string;
   smtpHost?: string;
@@ -105,10 +132,12 @@ export function checkEmailProviderStatus(): EmailProviderStatus {
     if (!config.smtp?.pass) missingRequirements.push('סיסמה לשרת SMTP או App Password (SMTP_PASS)');
   } else if (config.provider === 'resend') {
     if (!config.resendApiKey) missingRequirements.push('מפתח API של Resend (RESEND_API_KEY)');
+  } else if (config.provider === 'brevo') {
+    if (!config.brevoApiKey) missingRequirements.push('מפתח API של Brevo (BREVO_API_KEY)');
   } else if (config.provider === 'sendgrid') {
     if (!config.sendgridApiKey) missingRequirements.push('מפתח API של SendGrid (SENDGRID_API_KEY)');
   } else {
-    missingRequirements.push('ספק דוא״ל מאומת (שרת SMTP)');
+    missingRequirements.push('ספק דוא״ל מאומת (Resend HTTPS API לשרת מארח או Gmail SMTP ללוקאלי)');
   }
 
   const isConfigured = missingRequirements.length === 0 && config.provider !== 'none';
@@ -178,6 +207,11 @@ function buildHtmlEmail(params: SendDocumentEmailParams): string {
 
   const businessDisplayName = escapeHtml(business.legalName || business.tradingName || 'AMIT TOUCH');
   const businessNumberStr = business.businessNumber ? escapeHtml(business.businessNumber) : '';
+
+  const baseUrl = process.env.APP_BASE_URL || process.env.RENDER_EXTERNAL_URL;
+  const logoSrc = baseUrl
+    ? `${baseUrl.replace(/\/+$/, '')}/amit-touch-logo.png`
+    : 'cid:amit-touch-logo@amittouch';
 
   return `
 <!DOCTYPE html>
@@ -280,7 +314,7 @@ function buildHtmlEmail(params: SendDocumentEmailParams): string {
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto;">
                 <tr>
                   <td align="center">
-                    <img src="cid:amit-touch-logo@amittouch" alt="AMIT TOUCH" width="120" style="display: block; width: 120px; max-width: 120px; height: auto; border: 0; outline: none; text-decoration: none;" />
+                    <img src="${logoSrc}" alt="AMIT TOUCH" width="120" style="display: block; width: 120px; max-width: 120px; height: auto; border: 0; outline: none; text-decoration: none;" />
                   </td>
                 </tr>
               </table>
@@ -324,7 +358,7 @@ function buildHtmlEmail(params: SendDocumentEmailParams): string {
 }
 
 /**
- * Send document email through configured provider
+ * Send document email through configured provider (HTTPS API or SMTP)
  */
 export async function sendDocumentEmail(
   params: SendDocumentEmailParams
@@ -342,7 +376,7 @@ export async function sendDocumentEmail(
   if (!status.isConfigured) {
     const missing = status.missingRequirements.join(', ');
     throw new Error(
-      `לא הוגדר ספק דוא״ל מאומת לשליחת מסמכים. שדות חסרים בשרת: ${missing}. יש להגדיר שרת SMTP או מפתח ספק וכתובת שולח מאומתת בשרת. לא בוצעה סימולציה.`
+      `לא הוגדר ספק דוא״ל מאומת לשליחת מסמכים. שדות חסרים בשרת: ${missing}. יש להגדיר מפתח Resend HTTPS API ב-Render או שרת SMTP ללוקאלי. לא בוצעה סימולציה.`
     );
   }
 
@@ -356,11 +390,176 @@ export async function sendDocumentEmail(
   inFlightSends.add(lockKey);
   try {
     const config = getEmailConfig();
-    let transporter: any;
+    const html = buildHtmlEmail(params);
+    const fromAddress = config.fromName ? `"${config.fromName}" <${config.fromEmail}>` : config.fromEmail;
 
+    // =========================================================================
+    // PROVIDER: RESEND (HTTPS REST API over Port 443 - Recommended for Render Free)
+    // =========================================================================
+    if (config.provider === 'resend') {
+      if (!config.resendApiKey) throw new Error('מפתח API של Resend חסר (RESEND_API_KEY)');
+
+      console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}> via Resend HTTPS REST API (Port 443)...`);
+
+      const attachments = [
+        {
+          filename: `${pdfFilename}.pdf`,
+          content: pdfBuffer.toString('base64'),
+        },
+      ];
+
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${config.resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: fromAddress,
+          to: [cleanRecipient],
+          subject: subject.trim(),
+          text: messageBody.trim(),
+          html,
+          attachments,
+        }),
+      });
+
+      const resJson: any = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const errorDetails = resJson.message || resJson.error?.message || JSON.stringify(resJson);
+        console.error(`[EMAIL_SERVER] Resend API error (${res.status}):`, errorDetails);
+        throw new Error(`שגיאה בשליחת דוא״ל דרך Resend (${res.status}): ${errorDetails}`);
+      }
+
+      console.log(`[EMAIL_SERVER] Email successfully accepted by Resend for document "${document.documentNumber || document.id}". Message-ID: ${resJson.id}`);
+
+      return {
+        success: true,
+        provider: 'resend',
+        providerMessageId: resJson.id || `resend_${Date.now()}`,
+        sentAt: new Date().toISOString(),
+        recipient: cleanRecipient,
+        subject: subject.trim(),
+        pdfFilename,
+      };
+    }
+
+    // =========================================================================
+    // PROVIDER: BREVO (HTTPS REST API over Port 443)
+    // =========================================================================
+    if (config.provider === 'brevo') {
+      if (!config.brevoApiKey) throw new Error('מפתח API של Brevo חסר (BREVO_API_KEY)');
+
+      console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}> via Brevo HTTPS REST API (Port 443)...`);
+
+      const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'api-key': config.brevoApiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sender: {
+            name: config.fromName || 'AMIT TOUCH',
+            email: config.fromEmail,
+          },
+          to: [{ email: cleanRecipient }],
+          subject: subject.trim(),
+          htmlContent: html,
+          textContent: messageBody.trim(),
+          attachment: [
+            {
+              name: `${pdfFilename}.pdf`,
+              content: pdfBuffer.toString('base64'),
+            },
+          ],
+        }),
+      });
+
+      const resJson: any = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const errorDetails = resJson.message || JSON.stringify(resJson);
+        console.error(`[EMAIL_SERVER] Brevo API error (${res.status}):`, errorDetails);
+        throw new Error(`שגיאה בשליחת דוא״ל דרך Brevo (${res.status}): ${errorDetails}`);
+      }
+
+      console.log(`[EMAIL_SERVER] Email successfully accepted by Brevo for document "${document.documentNumber || document.id}". Message-ID: ${resJson.messageId}`);
+
+      return {
+        success: true,
+        provider: 'brevo',
+        providerMessageId: resJson.messageId || `brevo_${Date.now()}`,
+        sentAt: new Date().toISOString(),
+        recipient: cleanRecipient,
+        subject: subject.trim(),
+        pdfFilename,
+      };
+    }
+
+    // =========================================================================
+    // PROVIDER: SENDGRID (HTTPS REST API over Port 443)
+    // =========================================================================
+    if (config.provider === 'sendgrid') {
+      if (!config.sendgridApiKey) throw new Error('מפתח API של SendGrid חסר (SENDGRID_API_KEY)');
+
+      console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}> via SendGrid HTTPS REST API (Port 443)...`);
+
+      const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${config.sendgridApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: cleanRecipient }] }],
+          from: {
+            email: config.fromEmail,
+            name: config.fromName || 'AMIT TOUCH',
+          },
+          subject: subject.trim(),
+          content: [
+            { type: 'text/plain', value: messageBody.trim() },
+            { type: 'text/html', value: html },
+          ],
+          attachments: [
+            {
+              content: pdfBuffer.toString('base64'),
+              filename: `${pdfFilename}.pdf`,
+              type: 'application/pdf',
+              disposition: 'attachment',
+            },
+          ],
+        }),
+      });
+
+      if (!res.ok) {
+        const resJson: any = await res.json().catch(() => ({}));
+        const errorDetails = resJson.errors?.[0]?.message || JSON.stringify(resJson);
+        console.error(`[EMAIL_SERVER] SendGrid API error (${res.status}):`, errorDetails);
+        throw new Error(`שגיאה בשליחת דוא״ל דרך SendGrid (${res.status}): ${errorDetails}`);
+      }
+
+      const messageId = res.headers.get('x-message-id') || `sendgrid_${Date.now()}`;
+      console.log(`[EMAIL_SERVER] Email successfully accepted by SendGrid for document "${document.documentNumber || document.id}". Message-ID: ${messageId}`);
+
+      return {
+        success: true,
+        provider: 'sendgrid',
+        providerMessageId: messageId,
+        sentAt: new Date().toISOString(),
+        recipient: cleanRecipient,
+        subject: subject.trim(),
+        pdfFilename,
+      };
+    }
+
+    // =========================================================================
+    // PROVIDER: SMTP (Nodemailer - Preserved for Localhost / Development)
+    // =========================================================================
     if (config.provider === 'smtp') {
-      if (!config.smtp) throw new Error('הגדרות SMTP חסרות');
-      transporter = nodemailer.createTransport({
+      if (!config.smtp || !config.smtp.host) throw new Error('הגדרות SMTP חסרות בשרת');
+
+      const transporter = nodemailer.createTransport({
         host: config.smtp.host,
         port: config.smtp.port,
         secure: config.smtp.secure,
@@ -372,52 +571,49 @@ export async function sendDocumentEmail(
 
       // Verify SMTP transport connection before sending
       await transporter.verify();
-    } else {
-      throw new Error(`ספק דוא״ל מסוג "${config.provider}" אינו נתמך כעת. יש להגדיר חיבור SMTP מאומת.`);
-    }
 
-    const html = buildHtmlEmail(params);
-    const fromAddress = `"${config.fromName}" <${config.fromEmail}>`;
+      console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}> via SMTP (${config.smtp.host}:${config.smtp.port})...`);
 
-    console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}> via SMTP (${config.smtp.host}:${config.smtp.port})...`);
+      const logoPath = path.resolve(process.cwd(), 'public', 'amit-touch-logo.png');
+      const attachments: any[] = [
+        {
+          filename: `${pdfFilename}.pdf`,
+          content: pdfBuffer,
+          contentType: 'application/pdf',
+        },
+      ];
 
-    const logoPath = path.resolve(process.cwd(), 'public', 'amit-touch-logo.png');
-    const attachments: any[] = [
-      {
-        filename: `${pdfFilename}.pdf`,
-        content: pdfBuffer,
-        contentType: 'application/pdf',
-      },
-    ];
+      if (fs.existsSync(logoPath)) {
+        attachments.push({
+          filename: 'amit-touch-logo.png',
+          path: logoPath,
+          cid: 'amit-touch-logo@amittouch',
+        });
+      }
 
-    if (fs.existsSync(logoPath)) {
-      attachments.push({
-        filename: 'amit-touch-logo.png',
-        path: logoPath,
-        cid: 'amit-touch-logo@amittouch',
+      const info = await transporter.sendMail({
+        from: fromAddress,
+        to: cleanRecipient,
+        subject: subject.trim(),
+        text: messageBody.trim(),
+        html,
+        attachments,
       });
+
+      console.log(`[EMAIL_SERVER] Email successfully accepted by SMTP server for document "${document.documentNumber || document.id}". Message-ID: ${info.messageId}`);
+
+      return {
+        success: true,
+        provider: 'smtp',
+        providerMessageId: info.messageId,
+        sentAt: new Date().toISOString(),
+        recipient: cleanRecipient,
+        subject: subject.trim(),
+        pdfFilename,
+      };
     }
 
-    const info = await transporter.sendMail({
-      from: fromAddress,
-      to: cleanRecipient,
-      subject: subject.trim(),
-      text: messageBody.trim(),
-      html,
-      attachments,
-    });
-
-    console.log(`[EMAIL_SERVER] Email successfully accepted by SMTP server for document "${document.documentNumber || document.id}". Message-ID: ${info.messageId}`);
-
-    return {
-      success: true,
-      provider: config.provider,
-      providerMessageId: info.messageId,
-      sentAt: new Date().toISOString(),
-      recipient: cleanRecipient,
-      subject: subject.trim(),
-      pdfFilename,
-    };
+    throw new Error(`ספק דוא״ל מסוג "${config.provider}" אינו נתמך. יש להגדיר חיבור Resend HTTPS API או SMTP.`);
   } finally {
     // Release the duplicate-send lock after 4 seconds to protect against double clicks
     setTimeout(() => {
