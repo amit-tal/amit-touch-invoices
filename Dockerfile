@@ -43,6 +43,8 @@ ENV OWNER_EMAIL="amit2001tal@gmail.com"
 ENV OWNER_PASSWORD="AmitTouch2026!"
 ENV SETUP_TOKEN="amit-touch-2026"
 ENV SESSION_SECRET="amit-touch-production-secure-session-salt-2026"
+ENV SIGNING_KEY_PASSPHRASE="AmitTouch_LocalTestKey_2026_Secure!"
+ENV ELECTRONIC_RECEIPTS_ENABLED="true"
 
 # Install pnpm in production runner
 RUN corepack enable && corepack prepare pnpm@latest --activate

@@ -430,6 +430,23 @@ function ensureDataStore(): void {
         fs.writeFileSync(ENTRIES_FILE, JSON.stringify([], null, 2), 'utf-8');
       }
     }
+
+    // Ensure digital signature certificates exist in ./certs
+    const certsDir = path.resolve(process.cwd(), 'certs');
+    const seedCertsDir = path.join(SEED_DIR, 'certs');
+    if (!fs.existsSync(certsDir)) {
+      fs.mkdirSync(certsDir, { recursive: true });
+    }
+    if (fs.existsSync(seedCertsDir)) {
+      for (const f of ['signing_cert.pem', 'signing_key.pem', 'signing_cert.der']) {
+        const dest = path.join(certsDir, f);
+        const src = path.join(seedCertsDir, f);
+        if (!fs.existsSync(dest) && fs.existsSync(src)) {
+          fs.copyFileSync(src, dest);
+        }
+      }
+    }
+
     if (!fs.existsSync(BACKUPS_DIR)) {
       fs.mkdirSync(BACKUPS_DIR, { recursive: true });
     }

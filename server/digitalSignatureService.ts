@@ -355,6 +355,32 @@ export function loadSigningCredentials(): {
     }
   }
 
+  // 3b. Check seed certificate directory: ./server/seed/certs/signing_cert.pem & ./server/seed/certs/signing_key.pem
+  const seedCertPath = path.resolve(process.cwd(), 'server', 'seed', 'certs', 'signing_cert.pem');
+  const seedKeyPath = path.resolve(process.cwd(), 'server', 'seed', 'certs', 'signing_key.pem');
+  if (fs.existsSync(seedCertPath) && fs.existsSync(seedKeyPath)) {
+    try {
+      const certPem = fs.readFileSync(seedCertPath, 'utf8');
+      const rawKeyPem = fs.readFileSync(seedKeyPath, 'utf8');
+      const parsedKey = resolvePrivateKey(rawKeyPem);
+      if (parsedKey) {
+        const x509 = new crypto.X509Certificate(certPem);
+        const isComsign = x509.issuer.includes('Comsign') || x509.issuer.includes('PersonalID');
+        return {
+          certDer: x509.raw,
+          certPem,
+          privateKeyPem: parsedKey,
+          category: isComsign ? 'certified' : 'secured',
+          subject: x509.subject,
+          issuer: x509.issuer,
+          validTo: x509.validTo,
+        };
+      }
+    } catch (e) {
+      console.error('Failed loading seed credentials from ./server/seed/certs:', e);
+    }
+  }
+
   // 4. Check test packages directory fallback: ./data/test_packages/signing_cert.pem & signing_key.pem
   const testPkgCert = path.resolve(process.cwd(), 'data', 'test_packages', 'signing_cert.pem');
   const testPkgKey = path.resolve(process.cwd(), 'data', 'test_packages', 'signing_key.pem');

@@ -77,6 +77,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   }, [targetPaymentRequest, clientPaymentRequests]);
 
   const [totalAmount, setTotalAmount] = useState<number>(initialAmount);
+  const [isPaperReceipt, setIsPaperReceipt] = useState<boolean>(false);
 
   // Payment Methods
   const [methods, setMethods] = useState<ReceiptPaymentMethod[]>([
@@ -189,6 +190,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
         paymentReceivedDate: paymentDate,
         description: description.trim() || 'קבלה על תשלום',
         allocations: allocArray,
+        isPaperReceipt,
       });
 
       showToast(
@@ -515,6 +517,20 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
             </div>
           )}
 
+          {/* Paper receipt option */}
+          <div className="flex items-center gap-2.5 p-3 rounded-2xl bg-white/50 border border-white/80">
+            <input
+              type="checkbox"
+              id="paperReceiptToggle"
+              checked={isPaperReceipt}
+              onChange={e => setIsPaperReceipt(e.target.checked)}
+              className="w-4 h-4 rounded text-warm-700 focus:ring-warm-500 border-warm-300 cursor-pointer"
+            />
+            <label htmlFor="paperReceiptToggle" className="text-xs text-warm-900 cursor-pointer select-none">
+              הפקת קבלה מודפסת (מסלול נייר ללא חתימה אלקטרונית)
+            </label>
+          </div>
+
           {/* Footer Submit */}
           <div className="pt-4 border-t border-[#BC796F]/15 flex items-center justify-between">
             <button
@@ -531,7 +547,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
               className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-md active:scale-95 transition-all disabled:opacity-50"
             >
               <CheckCircle className="w-4 h-4" />
-              <span>{isTestMode ? 'הפק קבלת בדיקה' : 'הפק קבלה רשמית'}</span>
+              <span>{isTestMode ? 'הפק קבלת בדיקה' : (isPaperReceipt ? 'הפק קבלה מודפסת (מסלול נייר)' : 'הפק קבלה אלקטרונית רשמית')}</span>
             </button>
           </div>
         </form>

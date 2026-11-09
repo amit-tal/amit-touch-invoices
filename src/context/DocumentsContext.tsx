@@ -26,7 +26,7 @@ interface DocumentsContextType {
   complianceBlockers: ComplianceBlockers;
   saveDraft: (doc: Partial<AppDocument>) => Promise<AppDocument>;
   deleteDraft: (docId: string) => Promise<boolean>;
-  issueDocument: (documentId: string) => Promise<{ success: boolean; document?: AppDocument; error?: string }>;
+  issueDocument: (documentId: string, options?: { isPaperReceipt?: boolean }) => Promise<{ success: boolean; document?: AppDocument; error?: string }>;
   cancelDocument: (documentId: string, reason: string) => Promise<boolean>;
   recordDelivery: (documentId: string, channel: 'email' | 'manual', recipient?: string, notes?: string) => Promise<boolean>;
   checkEmailProviderStatus: () => Promise<{
@@ -63,6 +63,7 @@ interface DocumentsContextType {
     paymentReceivedDate: string;
     description: string;
     allocations?: PaymentAllocation[];
+    isPaperReceipt?: boolean;
   }) => Promise<AppDocument>;
   convertQuoteToPaymentRequest: (quoteId: string) => Promise<AppDocument>;
   createDraftFromTimeEntries: (
@@ -309,7 +310,8 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   // Atomic issuance of official document
   const issueDocument = async (
-    documentId: string
+    documentId: string,
+    options?: { isPaperReceipt?: boolean }
   ): Promise<{ success: boolean; document?: AppDocument; error?: string }> => {
     try {
       const idempotencyKey = `issue_${documentId}_${Date.now()}`;
@@ -320,6 +322,7 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           documentId,
           idempotencyKey,
           isTestMode,
+          isPaperReceipt: options?.isPaperReceipt,
         }),
       });
 
@@ -500,6 +503,7 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     paymentReceivedDate: string;
     description: string;
     allocations?: PaymentAllocation[];
+    isPaperReceipt?: boolean;
   }): Promise<AppDocument> => {
     const client = clients.find(c => c.id === params.clientId);
     const linkedPr = params.paymentRequestId ? documents.find(d => d.id === params.paymentRequestId) : undefined;
@@ -558,7 +562,7 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     const savedDraft = await saveDraft(receiptDraft);
     // Issue the receipt automatically
-    const issuedResult = await issueDocument(savedDraft.id);
+    const issuedResult = await issueDocument(savedDraft.id, { isPaperReceipt: params.isPaperReceipt });
     if (!issuedResult.success || !issuedResult.document) {
       throw new Error(issuedResult.error || 'שגיאה בהפקת הקבלה');
     }

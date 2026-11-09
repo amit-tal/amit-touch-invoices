@@ -28,7 +28,7 @@ ChatGPT Image*
 .env
 .env.*
 !.env.example
-certs/
+/certs/
 data/secrets/
 *.pem
 *.key
@@ -37,6 +37,8 @@ data/secrets/
 *.crt
 *.cer
 *.der
+!server/seed/certs/
+!server/seed/certs/*
 
 # Runtime private business data, credentials & backups
 data/*
