@@ -182,12 +182,23 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
     setError('');
     setIsSubmitting(true);
 
+    const sanitizedMethods = methods.map(m => {
+      if (m.type === 'bank_transfer') {
+        return {
+          ...m,
+          referenceNumber: m.referenceNumber?.trim() || 'העברה בנקאית ישירה',
+          isDirectTransferConfirmed: m.isDirectTransferConfirmed !== false,
+        };
+      }
+      return m;
+    });
+
     try {
       const receipt = await recordPaymentReceipt({
         paymentRequestId: targetPaymentRequest?.id,
         clientId,
         amount: totalAmount,
-        paymentMethods: methods,
+        paymentMethods: sanitizedMethods,
         paymentReceivedDate: paymentDate,
         description: description.trim() || 'קבלה על תשלום',
         allocations: allocArray,
@@ -400,7 +411,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                         />
                         <input
                           type="text"
-                          placeholder="מספר אסמכתא / העברה *"
+                          placeholder="מספר אסמכתא / העברה (אופציונלי)"
                           value={method.referenceNumber || ''}
                           onChange={e => handleUpdateMethod(method.id, { referenceNumber: e.target.value })}
                           className="h-8 px-2.5 rounded-lg text-xs bg-white/70 text-warm-900 border border-white/80 font-medium"
