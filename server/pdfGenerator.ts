@@ -669,19 +669,13 @@ export function generateDocumentPdfBuffer(doc: AppDocument, businessSettings?: B
   try {
     fs.writeFileSync(tmpHtml, html, 'utf8');
 
-    // Ultra-low-memory Chromium flags for constrained container environments (e.g. Render Free 512MB RAM)
-    // --single-process runs browser, utility, and renderer within one process (~40-60MB vs 300MB+ in multi-process)
-    const lowMemoryFlags = [
-      '--headless=new',
-      '--single-process',
-      '--no-zygote',
-      '--renderer-process-limit=1',
+    // Clean, robust flags for headless Chromium in container environments
+    const baseFlags = [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-gpu',
       '--disable-dev-shm-usage',
       '--disable-software-rasterizer',
-      '--disable-accelerated-2d-canvas',
       '--disable-extensions',
       '--disable-background-networking',
       '--disable-sync',
@@ -689,14 +683,28 @@ export function generateDocumentPdfBuffer(doc: AppDocument, businessSettings?: B
       '--mute-audio',
       '--no-first-run',
       '--hide-scrollbars',
-      '--no-pdf-header-footer',
-      '--js-flags="--max-old-space-size=64"'
-    ];
+      '--no-pdf-header-footer'
+    ].join(' ');
 
-    const cmd = `"${chromePath}" ${lowMemoryFlags.join(' ')} --print-to-pdf="${tmpPdf}" "${tmpHtml}"`;
-    execSync(cmd, { stdio: 'pipe', timeout: 30000, maxBuffer: 10 * 1024 * 1024 });
+    let generated = false;
+    // Attempt 1: Modern headless mode
+    try {
+      const cmd = `"${chromePath}" --headless=new ${baseFlags} --print-to-pdf="${tmpPdf}" "${tmpHtml}"`;
+      execSync(cmd, { stdio: 'pipe', timeout: 30000 });
+      if (fs.existsSync(tmpPdf) && fs.statSync(tmpPdf).size > 0) {
+        generated = true;
+      }
+    } catch (e1) {
+      console.warn('Modern headless failed, attempting classic headless mode:', e1);
+    }
 
-    if (!fs.existsSync(tmpPdf)) {
+    // Attempt 2: Classic headless fallback
+    if (!generated) {
+      const fallbackCmd = `"${chromePath}" --headless ${baseFlags} --print-to-pdf="${tmpPdf}" "${tmpHtml}"`;
+      execSync(fallbackCmd, { stdio: 'pipe', timeout: 30000 });
+    }
+
+    if (!fs.existsSync(tmpPdf) || fs.statSync(tmpPdf).size === 0) {
       throw new Error('Failed to generate PDF from Chrome');
     }
 
