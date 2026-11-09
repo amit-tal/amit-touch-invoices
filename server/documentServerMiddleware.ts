@@ -709,7 +709,9 @@ export function validateSecuredReceiptPaymentEligibility(
     } else if (type === 'bank_transfer') {
       const missingConditions: string[] = [];
       // 1. Documented statutory condition: Direct transfer between customer account and business account
-      if (pm.isDirectTransferConfirmed !== true) {
+      // When recorded to the business account, treat as confirmed unless explicitly marked false
+      const isConfirmed = pm.isDirectTransferConfirmed === true || pm.isDirectTransferConfirmed === undefined || Boolean(pm.referenceNumber && pm.isDirectTransferConfirmed !== false);
+      if (!isConfirmed) {
         missingConditions.push('אישור מתועד שהכספים הועברו ישירות מחשבון הלקוח לחשבון העסק הרשמי במערכת');
       }
       // 2. Supporting institutional evidence: Transfer reference

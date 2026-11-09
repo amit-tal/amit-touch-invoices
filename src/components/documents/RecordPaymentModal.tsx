@@ -87,6 +87,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       amount: initialAmount,
       bankName: businessSettings.bankDetails?.bankName || '',
       referenceNumber: '',
+      isDirectTransferConfirmed: true,
     },
   ]);
 
@@ -341,7 +342,10 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                     {/* Method Type */}
                     <CustomSelect
                       value={method.type}
-                      onChange={(val) => handleUpdateMethod(method.id, { type: val as PaymentMethodType })}
+                      onChange={(val) => handleUpdateMethod(method.id, { 
+                        type: val as PaymentMethodType,
+                        ...(val === 'bank_transfer' ? { isDirectTransferConfirmed: true } : {})
+                      })}
                       options={[
                         { value: 'bank_transfer', label: 'העברה בנקאית' },
                         { value: 'credit_card', label: 'כרטיס אשראי' },
@@ -385,21 +389,32 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
 
                   {/* Contextual Sub-fields */}
                   {method.type === 'bank_transfer' && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-white/40">
-                      <input
-                        type="text"
-                        placeholder="שם הבנק והסניף"
-                        value={method.bankName || ''}
-                        onChange={e => handleUpdateMethod(method.id, { bankName: e.target.value })}
-                        className="h-8 px-2.5 rounded-lg text-xs bg-white/70 text-warm-900 border border-white/80"
-                      />
-                      <input
-                        type="text"
-                        placeholder="מספר אסמכתא / העברה"
-                        value={method.referenceNumber || ''}
-                        onChange={e => handleUpdateMethod(method.id, { referenceNumber: e.target.value })}
-                        className="h-8 px-2.5 rounded-lg text-xs bg-white/70 text-warm-900 border border-white/80"
-                      />
+                    <div className="flex flex-col gap-2 pt-2 border-t border-white/40">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <input
+                          type="text"
+                          placeholder="שם הבנק והסניף"
+                          value={method.bankName || ''}
+                          onChange={e => handleUpdateMethod(method.id, { bankName: e.target.value })}
+                          className="h-8 px-2.5 rounded-lg text-xs bg-white/70 text-warm-900 border border-white/80"
+                        />
+                        <input
+                          type="text"
+                          placeholder="מספר אסמכתא / העברה *"
+                          value={method.referenceNumber || ''}
+                          onChange={e => handleUpdateMethod(method.id, { referenceNumber: e.target.value })}
+                          className="h-8 px-2.5 rounded-lg text-xs bg-white/70 text-warm-900 border border-white/80 font-medium"
+                        />
+                      </div>
+                      <label className="flex items-center gap-2 text-[11px] text-[#7D5A56] cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={method.isDirectTransferConfirmed !== false}
+                          onChange={e => handleUpdateMethod(method.id, { isDirectTransferConfirmed: e.target.checked })}
+                          className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-warm-300 cursor-pointer"
+                        />
+                        <span>אישור מתועד שהכספים הועברו ישירות מחשבון הלקוח לחשבון העסק (סעיף 18ב(ד))</span>
+                      </label>
                     </div>
                   )}
 
