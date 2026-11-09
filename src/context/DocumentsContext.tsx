@@ -149,7 +149,7 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return {
       isProductionActive: false,
       paymentRequestNext: 40016,
-      receiptNext: 250016,
+      receiptNext: 250020,
       quoteNext: null,
       testSequenceNext: 1001,
       isLocked: false,
@@ -767,7 +767,7 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         ...sequences,
         isProductionActive: true,
         paymentRequestNext: 40016,
-        receiptNext: 250016,
+        receiptNext: 250020,
         quoteNext: params.quoteNextStarting || 1001,
         confirmedAt: new Date().toISOString(),
       };

@@ -51,7 +51,7 @@ export interface BusinessSettings {
 export interface SequenceSettings {
   isProductionActive: boolean; // True only after one-time confirmation
   paymentRequestNext: number; // Official sequence: NEXT 40016
-  receiptNext: number; // Official sequence: NEXT 250016
+  receiptNext: number; // Official sequence: NEXT 250020
   quoteNext: number | null; // Unconfigured until user sets it
   testSequenceNext: number; // Starts at 1001 for test mode
   isLocked: boolean; // Locked after official documents are issued

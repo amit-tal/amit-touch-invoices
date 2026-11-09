@@ -342,7 +342,7 @@ function ensureDataStore(): void {
     const defaultSequences: SequenceSettings = {
       isProductionActive: false,
       paymentRequestNext: 40016, // NEXT official payment request
-      receiptNext: 250016, // NEXT official receipt
+      receiptNext: 250020, // NEXT official receipt
       quoteNext: null, // Unconfigured until user sets it
       testSequenceNext: 1001,
       isLocked: false,
@@ -2136,9 +2136,9 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
               maxPaymentRequestNum ? maxPaymentRequestNum + 1 : 40016
             ),
             receiptNext: Math.max(
-              currentSequences.receiptNext || 250016,
-              backupSequences.receiptNext || 250016,
-              maxReceiptNum ? maxReceiptNum + 1 : 250016
+              currentSequences.receiptNext || 250020,
+              backupSequences.receiptNext || 250020,
+              maxReceiptNum ? maxReceiptNum + 1 : 250020
             ),
             quoteNext: backupSequences.quoteNext !== undefined ? backupSequences.quoteNext : currentSequences.quoteNext,
             isLocked: currentSequences.isLocked || !!backupSequences.isLocked,
