@@ -57,7 +57,15 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
 
   // Server email config form state
   const [showConfigForm, setShowConfigForm] = useState(false);
-  const [selectedProviderTab, setSelectedProviderTab] = useState<'resend' | 'smtp' | 'brevo'>('resend');
+  const [selectedProviderTab, setSelectedProviderTab] = useState<'gmail' | 'resend' | 'smtp' | 'brevo'>('gmail');
+  const [gmailOauthStatus, setGmailOauthStatus] = useState<{
+    isConfigured: boolean;
+    isConnected: boolean;
+    connectedEmail?: string;
+  }>({
+    isConfigured: false,
+    isConnected: false,
+  });
   const [resendApiKey, setResendApiKey] = useState('');
   const [brevoApiKey, setBrevoApiKey] = useState('');
   const [smtpHost, setSmtpHost] = useState('smtp.gmail.com');
@@ -90,6 +98,15 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
 
     // Check provider status from server
     checkStatus();
+
+    const handleMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'GMAIL_CONNECTED') {
+        showToast(`חשבון Gmail חובר בהצלחה (${e.data.email})`);
+        checkStatus();
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
   }, [isOpen, document.id]);
 
   const checkStatus = async () => {
@@ -102,15 +119,48 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
         if (!testRecipient) setTestRecipient(status.fromEmail);
       }
       if (status.fromName) setFromName(status.fromName);
-      if (status.provider === 'smtp') {
+      if (status.provider === 'gmail') {
+        setSelectedProviderTab('gmail');
+      } else if (status.provider === 'smtp') {
         setSelectedProviderTab('smtp');
       } else if (status.provider === 'brevo') {
         setSelectedProviderTab('brevo');
       } else if (status.provider === 'resend') {
         setSelectedProviderTab('resend');
       }
+
+      // Check Google OAuth status
+      const googleRes = await fetch('/api/auth/google/status');
+      if (googleRes.ok) {
+        const gData = await googleRes.json();
+        setGmailOauthStatus(gData);
+        if (gData.isConnected && gData.connectedEmail) {
+          if (!status.fromEmail) setFromEmail(gData.connectedEmail);
+        }
+      }
     } finally {
       setIsCheckingProvider(false);
+    }
+  };
+
+  const handleConnectGmail = async () => {
+    setErrorMsg('');
+    try {
+      const res = await fetch('/api/auth/google/url');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'שגיאה ביצירת קישור Google OAuth');
+
+      const width = 560;
+      const height = 650;
+      const left = window.screenX + (window.outerWidth - width) / 2;
+      const top = window.screenY + (window.outerHeight - height) / 2;
+      window.open(
+        data.url,
+        'google_oauth_popup',
+        `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,location=no`
+      );
+    } catch (err: any) {
+      setErrorMsg(err.message || 'שגיאה בחיבור לחשבון Google');
     }
   };
 
@@ -330,22 +380,33 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
               {showConfigForm && (
                 <div className="p-3.5 rounded-2xl bg-white/95 border border-[#BC796F]/25 flex flex-col gap-3.5 mt-1 shadow-xs">
                   {/* Provider Tabs */}
-                  <div className="flex border-b border-warm-200 gap-1 pb-1">
+                  <div className="flex border-b border-warm-200 gap-1 pb-1 overflow-x-auto">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedProviderTab('gmail')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                        selectedProviderTab === 'gmail'
+                          ? 'bg-[#1A73E8] text-white shadow-xs'
+                          : 'text-warm-700 hover:bg-warm-100'
+                      }`}
+                    >
+                      Gmail API (ישיר מחשבון ה-Gmail שלך)
+                    </button>
                     <button
                       type="button"
                       onClick={() => setSelectedProviderTab('resend')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
                         selectedProviderTab === 'resend'
                           ? 'bg-[#88463F] text-white shadow-xs'
                           : 'text-warm-700 hover:bg-warm-100'
                       }`}
                     >
-                      Resend HTTPS API (מומלץ ל-Render)
+                      Resend HTTPS API
                     </button>
                     <button
                       type="button"
                       onClick={() => setSelectedProviderTab('smtp')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
                         selectedProviderTab === 'smtp'
                           ? 'bg-[#88463F] text-white shadow-xs'
                           : 'text-warm-700 hover:bg-warm-100'
@@ -356,15 +417,50 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setSelectedProviderTab('brevo')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
                         selectedProviderTab === 'brevo'
                           ? 'bg-[#88463F] text-white shadow-xs'
                           : 'text-warm-700 hover:bg-warm-100'
                       }`}
                     >
-                      Brevo HTTPS API
+                      Brevo
                     </button>
                   </div>
+
+                  {/* Gmail API Panel */}
+                  {selectedProviderTab === 'gmail' && (
+                    <div className="flex flex-col gap-2.5">
+                      <div className="text-[11px] text-[#7D5A56] bg-warm-50 p-2.5 rounded-lg border border-warm-200/60 leading-relaxed">
+                        שליחה ישירה מכתובת ה-Gmail שלך מעל HTTPS פורט 443 — עוקף את חסימת ה-SMTP של Render Free ללא צורך בספק חיצוני, עם אמינות מסירה מקסימלית (DKIM/SPF מקוריים של Google).
+                      </div>
+
+                      {gmailOauthStatus.isConnected ? (
+                        <div className="p-3 rounded-xl bg-green-50 border border-green-200 text-xs text-green-900 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-green-700" />
+                            <span>
+                              חשבון Gmail מחובר: <strong>{gmailOauthStatus.connectedEmail}</strong>
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-green-800 font-semibold">פעיל</span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          <div className="text-xs text-warm-800">
+                            כדי לשלוח מכתובת ה-Gmail שלך, לחץ על הכפתור לאישור הרשאת שליחה (<code className="bg-white px-1 py-0.5 rounded border border-warm-200" dir="ltr">gmail.send</code>):
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleConnectGmail}
+                            className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-[#1A73E8] hover:bg-[#1557B0] transition-colors flex items-center justify-center gap-2 shadow-xs"
+                          >
+                            <Mail className="w-4 h-4" />
+                            <span>חיבור לחשבון Gmail</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Resend Fields */}
                   {selectedProviderTab === 'resend' && (

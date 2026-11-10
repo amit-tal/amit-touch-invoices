@@ -6,6 +6,7 @@ import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { CustomSelect } from './CustomSelect';
 import { SequenceConfirmationModal } from './documents/SequenceConfirmationModal';
 import { BackupRestoreSection } from './settings/BackupRestoreSection';
+import { GmailIntegrationSection } from './settings/GmailIntegrationSection';
 import type { BusinessType } from '../types/documents';
 import { 
   Settings, 
@@ -608,6 +609,9 @@ export const SettingsView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Gmail API Direct Email Integration */}
+      <GmailIntegrationSection />
 
       {/* Backup & Restore Section */}
       <BackupRestoreSection />

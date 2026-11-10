@@ -90,8 +90,15 @@ function getDefaultEmailContent(
 import { 
   checkEmailProviderStatus, 
   saveEmailConfig, 
+  getEmailConfig,
   sendDocumentEmail 
 } from './emailService.ts';
+import {
+  getGmailOAuthStatus,
+  getGoogleAuthUrl,
+  exchangeCodeForTokens,
+  clearGmailTokens
+} from './gmailService.ts';
 import {
   getOwnerAccount,
   saveOwnerAccount,
@@ -936,6 +943,141 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         const token = parseSessionCookie(req);
         if (token) destroySession(token);
         clearSessionCookie(res);
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true }));
+        return;
+      }
+
+      // Google OAuth Status: GET /api/auth/google/status
+      if (req.method === 'GET' && url === '/api/auth/google/status') {
+        const status = getGmailOAuthStatus();
+        res.statusCode = 200;
+        res.end(JSON.stringify(status));
+        return;
+      }
+
+      // Google OAuth Generate Auth URL: GET /api/auth/google/url
+      if (req.method === 'GET' && (url === '/api/auth/google/url' || url.startsWith('/api/auth/google/url?'))) {
+        try {
+          const hostHeader = req.headers.host || '';
+          const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+          const origin = req.headers.origin || (hostHeader ? `${proto}://${hostHeader}` : undefined);
+          const authUrl = getGoogleAuthUrl(origin);
+          res.statusCode = 200;
+          res.end(JSON.stringify({ url: authUrl }));
+        } catch (err: any) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: err.message || 'שגיאה ביצירת קישור Google OAuth' }));
+        }
+        return;
+      }
+
+      // Google OAuth Callback: GET /api/auth/google/callback
+      if (req.method === 'GET' && url.startsWith('/api/auth/google/callback')) {
+        const parsedUrl = new URL(url, 'http://localhost');
+        const code = parsedUrl.searchParams.get('code');
+        const error = parsedUrl.searchParams.get('error');
+
+        if (error) {
+          res.statusCode = 400;
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.end(`
+            <!DOCTYPE html>
+            <html dir="rtl" lang="he">
+            <head><meta charset="utf-8"><title>שגיאת אימות Google</title></head>
+            <body style="font-family: sans-serif; text-align: center; padding: 40px; background: #FFF5F5; color: #88463F;">
+              <h2>החיבור ל-Google בוטל או נכשל</h2>
+              <p>שגיאה: ${error}</p>
+              <button onclick="window.close()" style="padding: 8px 16px; border-radius: 8px; background: #88463F; color: white; border: none; cursor: pointer;">סגור חלון</button>
+            </body>
+            </html>
+          `);
+          return;
+        }
+
+        if (!code) {
+          res.statusCode = 400;
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.end('<h3>קוד אימות חסר (Missing code parameter)</h3>');
+          return;
+        }
+
+        try {
+          const hostHeader = req.headers.host || '';
+          const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+          const origin = req.headers.origin || (hostHeader ? `${proto}://${hostHeader}` : undefined);
+          const tokens = await exchangeCodeForTokens(code, origin);
+
+          // Automatically set active email provider to 'gmail' with connected email address
+          const currentEmailConfig = getEmailConfig();
+          saveEmailConfig({
+            ...currentEmailConfig,
+            provider: 'gmail',
+            fromEmail: tokens.email,
+          });
+
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.end(`
+            <!DOCTYPE html>
+            <html dir="rtl" lang="he">
+            <head>
+              <meta charset="utf-8">
+              <title>חיבור חשבון Gmail הושלם</title>
+              <style>
+                body { font-family: 'Heebo', system-ui, sans-serif; text-align: center; padding: 50px 20px; background: #FAF7F6; color: #2B1816; }
+                .card { max-width: 460px; margin: 0 auto; background: white; padding: 32px; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); border: 1px solid #EAE1DF; }
+                .badge { display: inline-block; padding: 6px 14px; background: #E8F5E9; color: #2E7D32; border-radius: 20px; font-weight: bold; font-size: 13px; margin-bottom: 16px; }
+                h2 { color: #88463F; margin-top: 0; }
+                p { color: #7D5A56; font-size: 14px; line-height: 1.6; }
+              </style>
+            </head>
+            <body>
+              <div class="card">
+                <div class="badge">✓ החיבור הצליח</div>
+                <h2>חשבון Gmail חובר בהצלחה!</h2>
+                <p>המערכת תשלח כעת מסמכים ישירות מכתובת ה-Gmail שלך:<br><strong dir="ltr">${tokens.email}</strong></p>
+                <p style="font-size: 12px; color: #A0807C;">חלון זה ייסגר אוטומטית...</p>
+              </div>
+              <script>
+                if (window.opener) {
+                  window.opener.postMessage({ type: 'GMAIL_CONNECTED', email: '${tokens.email}' }, '*');
+                }
+                setTimeout(() => {
+                  window.close();
+                  window.location.href = '/';
+                }, 1800);
+              </script>
+            </body>
+            </html>
+          `);
+        } catch (err: any) {
+          console.error('[GMAIL_OAUTH_ERROR]', err);
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.end(`
+            <!DOCTYPE html>
+            <html dir="rtl" lang="he">
+            <head><meta charset="utf-8"><title>שגיאה בחיבור Gmail</title></head>
+            <body style="font-family: sans-serif; text-align: center; padding: 40px; background: #FFF5F5; color: #88463F;">
+              <h2>שגיאה בהשלמת חיבור Gmail</h2>
+              <p>${err.message || 'שגיאה בלתי צפויה'}</p>
+              <button onclick="window.close()" style="padding: 8px 16px; border-radius: 8px; background: #88463F; color: white; border: none; cursor: pointer;">סגור חלון</button>
+            </body>
+            </html>
+          `);
+        }
+        return;
+      }
+
+      // Google OAuth Disconnect: POST /api/auth/google/disconnect
+      if (req.method === 'POST' && url === '/api/auth/google/disconnect') {
+        clearGmailTokens();
+        const currentEmailConfig = getEmailConfig();
+        saveEmailConfig({
+          ...currentEmailConfig,
+          provider: 'none',
+        });
         res.statusCode = 200;
         res.end(JSON.stringify({ success: true }));
         return;

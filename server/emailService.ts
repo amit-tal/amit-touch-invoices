@@ -2,11 +2,16 @@ import fs from 'fs';
 import path from 'path';
 import nodemailer from 'nodemailer';
 import type { AppDocument, BusinessSettings } from '../src/types/documents.ts';
+import { 
+  getStoredGmailTokens, 
+  getGmailOAuthStatus, 
+  sendEmailViaGmailApi 
+} from './gmailService.ts';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const EMAIL_CONFIG_FILE = path.join(DATA_DIR, 'emailConfig.json');
 
-export type EmailProviderType = 'resend' | 'brevo' | 'sendgrid' | 'smtp' | 'none';
+export type EmailProviderType = 'gmail' | 'resend' | 'brevo' | 'sendgrid' | 'smtp' | 'none';
 
 export interface EmailConfig {
   provider: EmailProviderType;
@@ -64,15 +69,23 @@ export function getEmailConfig(): EmailConfig {
   const brevoApiKey = envBrevoApiKey || fileConfig.brevoApiKey || '';
   const sendgridApiKey = envSendgridApiKey || fileConfig.sendgridApiKey || '';
 
+  const gmailTokens = getStoredGmailTokens();
+  const isGmailActive = !!(gmailTokens?.connected && gmailTokens?.refreshToken);
+
   // Smart provider resolution:
   // 1. Explicit EMAIL_PROVIDER environment variable takes precedence
-  // 2. Otherwise HTTPS API key present (Resend -> Brevo -> SendGrid)
-  // 3. Otherwise SMTP environment variables
-  // 4. Otherwise stored fileConfig
+  // 2. Otherwise stored fileConfig if not 'none'
+  // 3. Otherwise connected Gmail OAuth account
+  // 4. Otherwise HTTPS API key present (Resend -> Brevo -> SendGrid)
+  // 5. Otherwise SMTP environment variables
   let provider: EmailProviderType = 'none';
 
-  if (envProvider && ['resend', 'brevo', 'sendgrid', 'smtp', 'none'].includes(envProvider)) {
+  if (envProvider && ['gmail', 'resend', 'brevo', 'sendgrid', 'smtp', 'none'].includes(envProvider)) {
     provider = envProvider;
+  } else if (fileConfig.provider && fileConfig.provider !== 'none') {
+    provider = fileConfig.provider;
+  } else if (isGmailActive) {
+    provider = 'gmail';
   } else if (resendApiKey) {
     provider = 'resend';
   } else if (brevoApiKey) {
@@ -81,13 +94,16 @@ export function getEmailConfig(): EmailConfig {
     provider = 'sendgrid';
   } else if (envSmtpHost && envSmtpUser && envSmtpPass) {
     provider = 'smtp';
-  } else if (fileConfig.provider && fileConfig.provider !== 'none') {
-    provider = fileConfig.provider;
   }
+
+  // If using Gmail API and fromEmail is not manually overridden, use authenticated Gmail address
+  const effectiveFromEmail = (provider === 'gmail' && gmailTokens?.email)
+    ? (envFromEmail || gmailTokens.email)
+    : envFromEmail;
 
   return {
     provider,
-    fromEmail: envFromEmail,
+    fromEmail: effectiveFromEmail,
     fromName: envFromName,
     resendApiKey,
     brevoApiKey,
@@ -132,7 +148,15 @@ export function checkEmailProviderStatus(): EmailProviderStatus {
     missingRequirements.push('כתובת שולח מאומתת (EMAIL_FROM)');
   }
 
-  if (config.provider === 'smtp') {
+  if (config.provider === 'gmail') {
+    const oauthStatus = getGmailOAuthStatus();
+    if (!oauthStatus.isConfigured) {
+      missingRequirements.push(`הגדרות Google Cloud חסרות בשרת (${oauthStatus.missingEnv.join(', ')})`);
+    }
+    if (!oauthStatus.isConnected) {
+      missingRequirements.push('חיבור לחשבון Gmail באמצעות כפתור "חיבור לחשבון Gmail"');
+    }
+  } else if (config.provider === 'smtp') {
     if (!config.smtp?.host) missingRequirements.push('כתובת שרת SMTP (SMTP_HOST)');
     if (!config.smtp?.user) missingRequirements.push('שם משתמש לשרת SMTP (SMTP_USER)');
     if (!config.smtp?.pass) missingRequirements.push('סיסמה לשרת SMTP או App Password (SMTP_PASS)');
@@ -143,7 +167,7 @@ export function checkEmailProviderStatus(): EmailProviderStatus {
   } else if (config.provider === 'sendgrid') {
     if (!config.sendgridApiKey) missingRequirements.push('מפתח API של SendGrid (SENDGRID_API_KEY)');
   } else {
-    missingRequirements.push('ספק דוא״ל מאומת (Resend HTTPS API לשרת מארח או Gmail SMTP ללוקאלי)');
+    missingRequirements.push('ספק דוא״ל מאומת (חיבור Gmail API, מפתח Resend HTTPS API, או Gmail SMTP)');
   }
 
   const isConfigured = missingRequirements.length === 0 && config.provider !== 'none';
@@ -409,6 +433,53 @@ export async function sendDocumentEmail(
     const effectiveBcc = (autoBccConfig && autoBccConfig.toLowerCase() !== cleanRecipient.toLowerCase())
       ? autoBccConfig
       : undefined;
+
+    // =========================================================================
+    // PROVIDER: GMAIL API (Google OAuth2 over HTTPS Port 443 - Direct from Owner Gmail)
+    // =========================================================================
+    if (config.provider === 'gmail') {
+      console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}>${effectiveBcc ? ` (BCC: <${effectiveBcc}>)` : ''} via Gmail API (Port 443)...`);
+
+      const logoPath = path.resolve(process.cwd(), 'public', 'amit-touch-logo.png');
+      const attachments: any[] = [
+        {
+          filename: `${pdfFilename}.pdf`,
+          content: pdfBuffer,
+          contentType: 'application/pdf',
+        },
+      ];
+
+      if (fs.existsSync(logoPath)) {
+        attachments.push({
+          filename: 'amit-touch-logo.png',
+          path: logoPath,
+          cid: 'amit-touch-logo@amittouch',
+        });
+      }
+
+      const gmailResult = await sendEmailViaGmailApi({
+        from: fromAddress,
+        to: cleanRecipient,
+        bcc: effectiveBcc,
+        subject: subject.trim(),
+        text: messageBody.trim(),
+        html,
+        attachments,
+      });
+
+      console.log(`[EMAIL_SERVER] Email successfully accepted by Gmail API for document "${document.documentNumber || document.id}". Message-ID: ${gmailResult.messageId}`);
+
+      return {
+        success: true,
+        provider: 'gmail',
+        providerMessageId: gmailResult.messageId,
+        sentAt: new Date().toISOString(),
+        recipient: cleanRecipient,
+        bcc: effectiveBcc,
+        subject: subject.trim(),
+        pdfFilename,
+      };
+    }
 
     // =========================================================================
     // PROVIDER: RESEND (HTTPS REST API over Port 443 - Recommended for Render Free)
