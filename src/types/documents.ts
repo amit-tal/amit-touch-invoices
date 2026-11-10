@@ -166,6 +166,7 @@ export interface EmailSendAttempt {
   id: string;
   timestamp: string;
   recipient: string;
+  bcc?: string;
   subject: string;
   status: 'sent' | 'delivered' | 'failed' | 'bounced' | 'test_only';
   provider?: string;
@@ -182,6 +183,7 @@ export interface DeliveryDetails {
   sentAt?: string;
   channel?: 'email' | 'manual';
   recipient?: string;
+  bcc?: string;
   notes?: string;
   manualMethod?: 'whatsapp' | 'in_person' | 'courier' | 'other';
   provider?: string;

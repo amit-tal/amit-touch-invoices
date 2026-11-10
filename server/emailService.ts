@@ -27,6 +27,12 @@ export interface EmailConfig {
 // In-flight sending locks to prevent duplicate sends from repeated clicks
 const inFlightSends = new Set<string>();
 
+// Optional test transporter override (used for deterministic unit/integration testing)
+let _customSmtpTransporter: any = null;
+export function setCustomSmtpTransporter(t: any): void {
+  _customSmtpTransporter = t;
+}
+
 /**
  * Load email configuration from environment variables or data/emailConfig.json
  */
@@ -156,6 +162,7 @@ export interface SendDocumentEmailParams {
   document: AppDocument;
   business: BusinessSettings;
   recipient: string;
+  bcc?: string;
   subject: string;
   messageBody: string;
   pdfBuffer: Buffer;
@@ -168,6 +175,7 @@ export interface SendDocumentEmailResult {
   providerMessageId: string;
   sentAt: string;
   recipient: string;
+  bcc?: string;
   subject: string;
   pdfFilename: string;
   previewUrl?: string;
@@ -393,13 +401,22 @@ export async function sendDocumentEmail(
     const html = buildHtmlEmail(params);
     const fromAddress = config.fromName ? `"${config.fromName}" <${config.fromEmail}>` : config.fromEmail;
 
+    // 4. Resolve automatic BCC address (e.g. amit2001tal@gmail.com)
+    // Automatically BCCs the studio owner on all customer-facing messages.
+    // Keeps customer in To, and only adds BCC if customer is NOT already that address (prevents duplicate copy).
+    const defaultOwnerBcc = 'amit2001tal@gmail.com';
+    const autoBccConfig = (params.bcc || process.env.AUTO_BCC_EMAIL || process.env.OWNER_EMAIL || defaultOwnerBcc).trim();
+    const effectiveBcc = (autoBccConfig && autoBccConfig.toLowerCase() !== cleanRecipient.toLowerCase())
+      ? autoBccConfig
+      : undefined;
+
     // =========================================================================
     // PROVIDER: RESEND (HTTPS REST API over Port 443 - Recommended for Render Free)
     // =========================================================================
     if (config.provider === 'resend') {
       if (!config.resendApiKey) throw new Error('מפתח API של Resend חסר (RESEND_API_KEY)');
 
-      console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}> via Resend HTTPS REST API (Port 443)...`);
+      console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}>${effectiveBcc ? ` (BCC: <${effectiveBcc}>)` : ''} via Resend HTTPS REST API (Port 443)...`);
 
       const attachments = [
         {
@@ -408,20 +425,26 @@ export async function sendDocumentEmail(
         },
       ];
 
+      const resendPayload: any = {
+        from: fromAddress,
+        to: [cleanRecipient],
+        subject: subject.trim(),
+        text: messageBody.trim(),
+        html,
+        attachments,
+      };
+
+      if (effectiveBcc) {
+        resendPayload.bcc = [effectiveBcc];
+      }
+
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${config.resendApiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          from: fromAddress,
-          to: [cleanRecipient],
-          subject: subject.trim(),
-          text: messageBody.trim(),
-          html,
-          attachments,
-        }),
+        body: JSON.stringify(resendPayload),
       });
 
       const resJson: any = await res.json().catch(() => ({}));
@@ -439,6 +462,7 @@ export async function sendDocumentEmail(
         providerMessageId: resJson.id || `resend_${Date.now()}`,
         sentAt: new Date().toISOString(),
         recipient: cleanRecipient,
+        bcc: effectiveBcc,
         subject: subject.trim(),
         pdfFilename,
       };
@@ -450,7 +474,28 @@ export async function sendDocumentEmail(
     if (config.provider === 'brevo') {
       if (!config.brevoApiKey) throw new Error('מפתח API של Brevo חסר (BREVO_API_KEY)');
 
-      console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}> via Brevo HTTPS REST API (Port 443)...`);
+      console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}>${effectiveBcc ? ` (BCC: <${effectiveBcc}>)` : ''} via Brevo HTTPS REST API (Port 443)...`);
+
+      const brevoPayload: any = {
+        sender: {
+          name: config.fromName || 'AMIT TOUCH',
+          email: config.fromEmail,
+        },
+        to: [{ email: cleanRecipient }],
+        subject: subject.trim(),
+        htmlContent: html,
+        textContent: messageBody.trim(),
+        attachment: [
+          {
+            name: `${pdfFilename}.pdf`,
+            content: pdfBuffer.toString('base64'),
+          },
+        ],
+      };
+
+      if (effectiveBcc) {
+        brevoPayload.bcc = [{ email: effectiveBcc }];
+      }
 
       const res = await fetch('https://api.brevo.com/v3/smtp/email', {
         method: 'POST',
@@ -458,22 +503,7 @@ export async function sendDocumentEmail(
           'api-key': config.brevoApiKey,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          sender: {
-            name: config.fromName || 'AMIT TOUCH',
-            email: config.fromEmail,
-          },
-          to: [{ email: cleanRecipient }],
-          subject: subject.trim(),
-          htmlContent: html,
-          textContent: messageBody.trim(),
-          attachment: [
-            {
-              name: `${pdfFilename}.pdf`,
-              content: pdfBuffer.toString('base64'),
-            },
-          ],
-        }),
+        body: JSON.stringify(brevoPayload),
       });
 
       const resJson: any = await res.json().catch(() => ({}));
@@ -491,6 +521,7 @@ export async function sendDocumentEmail(
         providerMessageId: resJson.messageId || `brevo_${Date.now()}`,
         sentAt: new Date().toISOString(),
         recipient: cleanRecipient,
+        bcc: effectiveBcc,
         subject: subject.trim(),
         pdfFilename,
       };
@@ -502,7 +533,12 @@ export async function sendDocumentEmail(
     if (config.provider === 'sendgrid') {
       if (!config.sendgridApiKey) throw new Error('מפתח API של SendGrid חסר (SENDGRID_API_KEY)');
 
-      console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}> via SendGrid HTTPS REST API (Port 443)...`);
+      console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}>${effectiveBcc ? ` (BCC: <${effectiveBcc}>)` : ''} via SendGrid HTTPS REST API (Port 443)...`);
+
+      const personalization: any = { to: [{ email: cleanRecipient }] };
+      if (effectiveBcc) {
+        personalization.bcc = [{ email: effectiveBcc }];
+      }
 
       const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
         method: 'POST',
@@ -511,7 +547,7 @@ export async function sendDocumentEmail(
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          personalizations: [{ to: [{ email: cleanRecipient }] }],
+          personalizations: [personalization],
           from: {
             email: config.fromEmail,
             name: config.fromName || 'AMIT TOUCH',
@@ -548,6 +584,7 @@ export async function sendDocumentEmail(
         providerMessageId: messageId,
         sentAt: new Date().toISOString(),
         recipient: cleanRecipient,
+        bcc: effectiveBcc,
         subject: subject.trim(),
         pdfFilename,
       };
@@ -559,7 +596,7 @@ export async function sendDocumentEmail(
     if (config.provider === 'smtp') {
       if (!config.smtp || !config.smtp.host) throw new Error('הגדרות SMTP חסרות בשרת');
 
-      const transporter = nodemailer.createTransport({
+      const transporter = _customSmtpTransporter || nodemailer.createTransport({
         host: config.smtp.host,
         port: config.smtp.port,
         secure: config.smtp.secure,
@@ -572,7 +609,7 @@ export async function sendDocumentEmail(
       // Verify SMTP transport connection before sending
       await transporter.verify();
 
-      console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}> via SMTP (${config.smtp.host}:${config.smtp.port})...`);
+      console.log(`[EMAIL_SERVER] Sending document "${document.documentNumber || document.id}" to <${cleanRecipient}>${effectiveBcc ? ` (BCC: <${effectiveBcc}>)` : ''} via SMTP (${config.smtp.host}:${config.smtp.port})...`);
 
       const logoPath = path.resolve(process.cwd(), 'public', 'amit-touch-logo.png');
       const attachments: any[] = [
@@ -591,14 +628,20 @@ export async function sendDocumentEmail(
         });
       }
 
-      const info = await transporter.sendMail({
+      const mailOptions: any = {
         from: fromAddress,
         to: cleanRecipient,
         subject: subject.trim(),
         text: messageBody.trim(),
         html,
         attachments,
-      });
+      };
+
+      if (effectiveBcc) {
+        mailOptions.bcc = effectiveBcc;
+      }
+
+      const info = await transporter.sendMail(mailOptions);
 
       console.log(`[EMAIL_SERVER] Email successfully accepted by SMTP server for document "${document.documentNumber || document.id}". Message-ID: ${info.messageId}`);
 
@@ -608,6 +651,7 @@ export async function sendDocumentEmail(
         providerMessageId: info.messageId,
         sentAt: new Date().toISOString(),
         recipient: cleanRecipient,
+        bcc: effectiveBcc,
         subject: subject.trim(),
         pdfFilename,
       };

@@ -607,6 +607,18 @@ export const EmailDeliveryModal: React.FC<EmailDeliveryModalProps> = ({
               className="w-full h-10 px-3.5 rounded-xl text-sm bg-white/70 border border-[#BC796F]/25 focus:outline-none focus:ring-2 focus:ring-[#BC796F]/50 transition-all font-mono"
               dir="ltr"
             />
+            {/* Auto-BCC notification */}
+            <div className="flex items-center gap-1.5 text-[11px] text-[#7D5A56] mt-0.5">
+              {recipient.trim().toLowerCase() === 'amit2001tal@gmail.com' ? (
+                <span className="text-[#88463F] font-medium">
+                  הנמען הוא חשבון הבעלים — לא יישלח עותק כפול ב-BCC.
+                </span>
+              ) : (
+                <span>
+                  עותק נסתר (BCC) יישלח אוטומטית ל-<strong>amit2001tal@gmail.com</strong> עם אותו תוכן וקובץ ה-PDF.
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Subject Input */}

@@ -1682,6 +1682,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
               id: `attempt_${Date.now()}`,
               timestamp: sendResult.sentAt,
               recipient: sendResult.recipient,
+              bcc: sendResult.bcc,
               subject: sendResult.subject,
               status: 'sent' as const,
               provider: sendResult.provider,
@@ -1696,6 +1697,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
               sentAt: sendResult.sentAt,
               deliveredAt: sendResult.sentAt,
               recipient: sendResult.recipient,
+              bcc: sendResult.bcc,
               provider: sendResult.provider,
               providerMessageId: sendResult.providerMessageId,
               isUnverifiedLegacy: false,
@@ -1708,8 +1710,8 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
               action: 'email_sent',
               timestamp: sendResult.sentAt,
               details: isReminder
-                ? `נשלחה תזכורת תשלום למסמך מס׳ ${doc.documentNumber || doc.id} לספק הדוא״ל (${sendResult.provider}) לנמען ${sendResult.recipient}. מזהה הודעה אצל הספק: ${sendResult.providerMessageId}`
-                : `המסמך נשלח בהצלחה לספק הדוא״ל (${sendResult.provider}) לנמען ${sendResult.recipient}. מזהה הודעה אצל הספק: ${sendResult.providerMessageId}`,
+                ? `נשלחה תזכורת תשלום למסמך מס׳ ${doc.documentNumber || doc.id} לספק הדוא״ל (${sendResult.provider}) לנמען ${sendResult.recipient}${sendResult.bcc ? ` (עותק נסתר: ${sendResult.bcc})` : ''}. מזהה הודעה אצל הספק: ${sendResult.providerMessageId}`
+                : `המסמך נשלח בהצלחה לספק הדוא״ל (${sendResult.provider}) לנמען ${sendResult.recipient}${sendResult.bcc ? ` (עותק נסתר: ${sendResult.bcc})` : ''}. מזהה הודעה אצל הספק: ${sendResult.providerMessageId}`,
               performedBy: 'AMIT TOUCH Studio',
             });
 
@@ -1846,7 +1848,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
             documentId: sampleDoc.id,
             action: 'email_sent',
             timestamp: sendResult.sentAt,
-            details: `נשלח מייל בדיקה עם קובץ PDF לדוגמה דרך (${sendResult.provider}) לנמען ${sendResult.recipient}. מזהה: ${sendResult.providerMessageId}`,
+            details: `נשלח מייל בדיקה עם קובץ PDF לדוגמה דרך (${sendResult.provider}) לנמען ${sendResult.recipient}${sendResult.bcc ? ` (עותק נסתר: ${sendResult.bcc})` : ''}. מזהה: ${sendResult.providerMessageId}`,
             performedBy: 'AMIT TOUCH Studio',
           });
           writeJson(AUDIT_FILE, audit);
