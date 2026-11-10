@@ -1180,11 +1180,11 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
       // 3. POST /api/documents/issue - Atomic issuance of official document
       if (req.method === 'POST' && url === '/api/documents/issue') {
-        const { documentId, idempotencyKey, isTestMode = false } = await readBody();
+        const { documentId, documentDraft, idempotencyKey, isTestMode = false, isPaperReceipt: reqIsPaperReceipt } = await readBody();
 
-        if (!documentId) {
+        if (!documentId && !documentDraft) {
           res.statusCode = 400;
-          res.end(JSON.stringify({ error: 'מזהה מסמך חסר' }));
+          res.end(JSON.stringify({ error: 'מזהה מסמך או טיוטת מסמך חסרים' }));
           return;
         }
 
@@ -1196,8 +1196,12 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
             const documents = readJson<AppDocument[]>(DOCUMENTS_FILE);
             const issuedDoc = documents.find(d => d.id === idempotencyMap[idempotencyKey]);
             if (issuedDoc) {
+              const updatedPRs = (issuedDoc.type === 'receipt' && issuedDoc.paymentAllocations)
+                ? documents.filter(d => issuedDoc.paymentAllocations?.some(a => a.paymentRequestId === d.id))
+                : [];
               res.statusCode = 200;
-              res.end(JSON.stringify(issuedDoc));
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ ...issuedDoc, _updatedPaymentRequests: updatedPRs }));
               return;
             }
           }
@@ -1207,17 +1211,35 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           const business = readJson<BusinessSettings>(BUSINESS_FILE);
           const audit = readJson<AuditLogEntry[]>(AUDIT_FILE);
 
-          const docIdx = documents.findIndex(d => d.id === documentId);
-          if (docIdx === -1) {
-            res.statusCode = 404;
-            res.end(JSON.stringify({ error: 'מסמך לא נמצא' }));
-            return;
+          let docIdx = -1;
+          let doc: AppDocument;
+
+          if (documentId) {
+            docIdx = documents.findIndex(d => d.id === documentId);
           }
 
-          const doc = documents[docIdx];
-          if (doc.status !== 'draft') {
-            res.statusCode = 400;
-            res.end(JSON.stringify({ error: 'המסמך כבר הופק בעבר ואינו ניתן להפקה חוזרת' }));
+          if (docIdx !== -1) {
+            doc = documents[docIdx];
+            if (doc.status !== 'draft') {
+              res.statusCode = 400;
+              res.end(JSON.stringify({ error: 'המסמך כבר הופק בעבר ואינו ניתן להפקה חוזרת' }));
+              return;
+            }
+          } else if (documentDraft) {
+            // Fast atomic issuance from draft payload without separate pre-save roundtrip
+            doc = {
+              ...documentDraft,
+              id: documentDraft.id || `doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+              status: 'draft',
+              documentNumber: null,
+              lineItems: Array.isArray(documentDraft.lineItems) ? documentDraft.lineItems : [],
+              createdAt: documentDraft.createdAt || new Date().toISOString(),
+            };
+            documents.unshift(doc);
+            docIdx = 0;
+          } else {
+            res.statusCode = 404;
+            res.end(JSON.stringify({ error: 'מסמך לא נמצא' }));
             return;
           }
 
@@ -1248,7 +1270,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           }
 
           // Statutory Israeli Bookkeeping validation for receipts (הוראות ניהול פנקסים)
-          const isPaperReceipt = doc.deliveryMethod === 'paper' || doc.isPaperReceipt === true;
+          const isPaperReceipt = reqIsPaperReceipt ?? (doc.deliveryMethod === 'paper' || doc.isPaperReceipt === true);
 
           if (doc.type === 'receipt') {
             if (!doc.paymentMethods || !Array.isArray(doc.paymentMethods) || doc.paymentMethods.length === 0) {
@@ -1574,8 +1596,13 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           writeJson(SEQUENCES_FILE, sequences);
           writeJson(AUDIT_FILE, audit);
 
+          const updatedPRs = (issuedDoc.type === 'receipt' && issuedDoc.paymentAllocations)
+            ? documents.filter(d => issuedDoc.paymentAllocations?.some(a => a.paymentRequestId === d.id))
+            : [];
+
           res.statusCode = 200;
-          res.end(JSON.stringify(issuedDoc));
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ ...issuedDoc, _updatedPaymentRequests: updatedPRs }));
         } finally {
           releaseLock();
         }

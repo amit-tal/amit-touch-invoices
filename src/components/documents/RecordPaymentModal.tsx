@@ -41,7 +41,6 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
     businessSettings, 
     isTestMode, 
     recordPaymentReceipt,
-    refreshDocuments,
   } = useDocuments();
 
   const [clientId, setClientId] = useState<string>(() => {
@@ -208,9 +207,6 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
         allocations: allocArray,
         isPaperReceipt,
       });
-
-      // Synchronize in-memory documents list and payment request balances
-      await refreshDocuments();
 
       const receiptNum = receipt.documentNumber || receipt.id;
       showToast(

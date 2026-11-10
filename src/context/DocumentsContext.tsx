@@ -26,7 +26,7 @@ interface DocumentsContextType {
   complianceBlockers: ComplianceBlockers;
   saveDraft: (doc: Partial<AppDocument>) => Promise<AppDocument>;
   deleteDraft: (docId: string) => Promise<boolean>;
-  issueDocument: (documentId: string, options?: { isPaperReceipt?: boolean; silentToast?: boolean }) => Promise<{ success: boolean; document?: AppDocument; error?: string }>;
+  issueDocument: (documentId?: string, options?: { documentDraft?: Partial<AppDocument>; isPaperReceipt?: boolean; silentToast?: boolean }) => Promise<{ success: boolean; document?: AppDocument; error?: string }>;
   cancelDocument: (documentId: string, reason: string) => Promise<boolean>;
   recordDelivery: (documentId: string, channel: 'email' | 'manual', recipient?: string, notes?: string) => Promise<boolean>;
   checkEmailProviderStatus: () => Promise<{
@@ -310,16 +310,18 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   // Atomic issuance of official document
   const issueDocument = async (
-    documentId: string,
-    options?: { isPaperReceipt?: boolean; silentToast?: boolean }
+    documentId?: string,
+    options?: { documentDraft?: Partial<AppDocument>; isPaperReceipt?: boolean; silentToast?: boolean }
   ): Promise<{ success: boolean; document?: AppDocument; error?: string }> => {
     try {
-      const idempotencyKey = `issue_${documentId}_${Date.now()}`;
+      const targetId = documentId || options?.documentDraft?.id || `new_issue_${Date.now()}`;
+      const idempotencyKey = `issue_${targetId}_${Date.now()}`;
       const res = await fetch('/api/documents/issue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           documentId,
+          documentDraft: options?.documentDraft,
           idempotencyKey,
           isTestMode,
           isPaperReceipt: options?.isPaperReceipt,
@@ -334,7 +336,30 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         return { success: false, error: data.error };
       }
 
-      await refreshDocuments();
+      const issuedDoc: AppDocument = data;
+      const updatedPRs: AppDocument[] = data._updatedPaymentRequests || [];
+
+      // Update in-memory documents list immediately for instant UI response!
+      setDocuments(prevDocs => {
+        const next = [...prevDocs];
+        const existingIdx = next.findIndex(d => d.id === issuedDoc.id);
+        if (existingIdx !== -1) {
+          next[existingIdx] = issuedDoc;
+        } else {
+          next.unshift(issuedDoc);
+        }
+        for (const pr of updatedPRs) {
+          const prIdx = next.findIndex(d => d.id === pr.id);
+          if (prIdx !== -1) {
+            next[prIdx] = pr;
+          }
+        }
+        return next;
+      });
+
+      // Background non-blocking sync for sequences & audit log
+      refreshDocuments().catch(() => {});
+
       if (!options?.silentToast) {
         showToast(`המסמך הופק בהצלחה! מספר מסמך: ${data.documentNumber}`);
       }
@@ -566,9 +591,9 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       notes: unallocated > 0 ? `לתשומת לב: תשלום ביתר בסך ${unallocated} ₪ נרשם כזכות ללקוח.` : undefined,
     };
 
-    const savedDraft = await saveDraft(receiptDraft);
-    // Issue the receipt automatically (silentToast: true so recordPaymentReceipt / modal shows exact confirmation)
-    const issuedResult = await issueDocument(savedDraft.id, { 
+    // Fast atomic issuance directly from draft payload in a single server request (bypasses separate draft pre-save & blocking document refreshes)
+    const issuedResult = await issueDocument(undefined, { 
+      documentDraft: receiptDraft,
       isPaperReceipt: params.isPaperReceipt,
       silentToast: true,
     });
