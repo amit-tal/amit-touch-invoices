@@ -26,7 +26,7 @@ interface DocumentsContextType {
   complianceBlockers: ComplianceBlockers;
   saveDraft: (doc: Partial<AppDocument>) => Promise<AppDocument>;
   deleteDraft: (docId: string) => Promise<boolean>;
-  issueDocument: (documentId: string, options?: { isPaperReceipt?: boolean }) => Promise<{ success: boolean; document?: AppDocument; error?: string }>;
+  issueDocument: (documentId: string, options?: { isPaperReceipt?: boolean; silentToast?: boolean }) => Promise<{ success: boolean; document?: AppDocument; error?: string }>;
   cancelDocument: (documentId: string, reason: string) => Promise<boolean>;
   recordDelivery: (documentId: string, channel: 'email' | 'manual', recipient?: string, notes?: string) => Promise<boolean>;
   checkEmailProviderStatus: () => Promise<{
@@ -311,7 +311,7 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   // Atomic issuance of official document
   const issueDocument = async (
     documentId: string,
-    options?: { isPaperReceipt?: boolean }
+    options?: { isPaperReceipt?: boolean; silentToast?: boolean }
   ): Promise<{ success: boolean; document?: AppDocument; error?: string }> => {
     try {
       const idempotencyKey = `issue_${documentId}_${Date.now()}`;
@@ -328,15 +328,21 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
       const data = await res.json();
       if (!res.ok) {
-        showToast(data.error || 'שגיאה בהפקת המסמך');
+        if (!options?.silentToast) {
+          showToast(data.error || 'שגיאה בהפקת המסמך');
+        }
         return { success: false, error: data.error };
       }
 
       await refreshDocuments();
-      showToast(`המסמך הופק בהצלחה! מספר מסמך: ${data.documentNumber}`);
+      if (!options?.silentToast) {
+        showToast(`המסמך הופק בהצלחה! מספר מסמך: ${data.documentNumber}`);
+      }
       return { success: true, document: data };
     } catch (err: any) {
-      showToast(err.message || 'שגיאה בהפקת המסמך');
+      if (!options?.silentToast) {
+        showToast(err.message || 'שגיאה בהפקת המסמך');
+      }
       return { success: false, error: err.message };
     }
   };
@@ -561,8 +567,11 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     };
 
     const savedDraft = await saveDraft(receiptDraft);
-    // Issue the receipt automatically
-    const issuedResult = await issueDocument(savedDraft.id, { isPaperReceipt: params.isPaperReceipt });
+    // Issue the receipt automatically (silentToast: true so recordPaymentReceipt / modal shows exact confirmation)
+    const issuedResult = await issueDocument(savedDraft.id, { 
+      isPaperReceipt: params.isPaperReceipt,
+      silentToast: true,
+    });
     if (!issuedResult.success || !issuedResult.document) {
       throw new Error(issuedResult.error || 'שגיאה בהפקת הקבלה');
     }

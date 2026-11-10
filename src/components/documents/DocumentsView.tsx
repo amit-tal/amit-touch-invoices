@@ -173,6 +173,8 @@ export const DocumentsView: React.FC = () => {
 
   // Handle record payment for document
   const handleRecordPayment = (doc: AppDocument) => {
+    setIsDetailsModalOpen(false);
+    setSelectedDocForDetails(null);
     setPaymentTargetRequest(doc);
     setIsPaymentModalOpen(true);
   };
@@ -775,8 +777,12 @@ export const DocumentsView: React.FC = () => {
           setPaymentTargetRequest(null);
         }}
         targetPaymentRequest={paymentTargetRequest}
-        onReceiptIssued={(receipt) => {
-          handleOpenDetails(receipt);
+        onReceiptIssued={(_receipt) => {
+          // Close modal and return directly to documents view without opening another dialog
+          setIsPaymentModalOpen(false);
+          setPaymentTargetRequest(null);
+          setIsDetailsModalOpen(false);
+          setSelectedDocForDetails(null);
         }}
       />
 

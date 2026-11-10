@@ -16,7 +16,8 @@ import {
   Plus, 
   Trash2, 
   CheckCircle, 
-  AlertCircle 
+  AlertCircle,
+  RefreshCw 
 } from 'lucide-react';
 
 interface RecordPaymentModalProps {
@@ -39,7 +40,8 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
     documents, 
     businessSettings, 
     isTestMode, 
-    recordPaymentReceipt 
+    recordPaymentReceipt,
+    refreshDocuments,
   } = useDocuments();
 
   const [clientId, setClientId] = useState<string>(() => {
@@ -158,6 +160,8 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   // Submit Receipt Issuance
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     if (!clientId) {
       setError('יש לבחור לקוח');
       return;
@@ -205,16 +209,21 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
         isPaperReceipt,
       });
 
+      // Synchronize in-memory documents list and payment request balances
+      await refreshDocuments();
+
+      const receiptNum = receipt.documentNumber || receipt.id;
       showToast(
         receipt.isTestMode
-          ? `הופקה קבלת בדיקה ${receipt.documentNumber}`
-          : `הופקה קבלה רשמית ${receipt.documentNumber}`
+          ? `קבלה מס׳ ${receiptNum} (מצב בדיקה) הופקה בהצלחה`
+          : `קבלה מס׳ ${receiptNum} הופקה בהצלחה`
       );
 
       if (onReceiptIssued) onReceiptIssued(receipt);
       onClose();
     } catch (err: any) {
-      setError(err?.message || 'שגיאה בהפקת הקבלה');
+      // Keep dialog open with all entered values intact and show clear Hebrew error
+      setError(err?.message || 'שגיאה בהפקת הקבלה. אנא בדוק את הנתונים ונסה שוב.');
     } finally {
       setIsSubmitting(false);
     }
@@ -251,7 +260,8 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
 
           <button
             onClick={onClose}
-            className="p-2 rounded-xl text-warm-600 hover:text-warm-900 hover:bg-white/60 transition-colors"
+            disabled={isSubmitting}
+            className="p-2 rounded-xl text-warm-600 hover:text-warm-900 hover:bg-white/60 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <X className="w-5 h-5" />
           </button>
@@ -259,9 +269,12 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
 
         {/* Error Alert */}
         {error && (
-          <div className="mx-6 mt-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{error}</span>
+          <div 
+            role="alert"
+            className="mx-6 mt-4 p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-start gap-2.5 shadow-sm animate-fade-in"
+          >
+            <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+            <div className="flex-1 font-medium leading-relaxed">{error}</div>
           </div>
         )}
 
@@ -562,7 +575,8 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-warm-800 hover:bg-white/60 transition-colors"
+              disabled={isSubmitting}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-warm-800 hover:bg-white/60 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               ביטול
             </button>
@@ -570,10 +584,19 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
             <button
               type="submit"
               disabled={isSubmitting}
-              className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-md active:scale-95 transition-all disabled:opacity-50"
+              className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-md active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
             >
-              <CheckCircle className="w-4 h-4" />
-              <span>{isTestMode ? 'הפק קבלת בדיקה' : (isPaperReceipt ? 'הפק קבלה מודפסת (מסלול נייר)' : 'הפק קבלה אלקטרונית רשמית')}</span>
+              {isSubmitting ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>מפיק קבלה...</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle className="w-4 h-4" />
+                  <span>{isTestMode ? 'הפק קבלת בדיקה' : (isPaperReceipt ? 'הפק קבלה מודפסת (מסלול נייר)' : 'הפק קבלה אלקטרונית רשמית')}</span>
+                </>
+              )}
             </button>
           </div>
         </form>
