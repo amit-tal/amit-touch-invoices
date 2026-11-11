@@ -160,6 +160,7 @@ export const DocumentEditorModal: React.FC<DocumentEditorModalProps> = ({
         amount: documentToEdit?.totalAmount || 0,
         bankName: '',
         referenceNumber: '',
+        isDirectTransferConfirmed: true,
       }
     ];
   });
@@ -239,7 +240,7 @@ export const DocumentEditorModal: React.FC<DocumentEditorModalProps> = ({
       setExclusions(documentToEdit.exclusions || '');
       setPaymentReceivedDate(documentToEdit.paymentReceivedDate || documentToEdit.date || new Date().toISOString().split('T')[0]);
       setPaymentMethods(documentToEdit.paymentMethods && documentToEdit.paymentMethods.length > 0 ? documentToEdit.paymentMethods : [
-        { id: 'pm_' + Date.now(), type: 'bank_transfer', amount: documentToEdit.totalAmount || 0 }
+        { id: 'pm_' + Date.now(), type: 'bank_transfer', amount: documentToEdit.totalAmount || 0, isDirectTransferConfirmed: true }
       ]);
       setPaymentAllocations(documentToEdit.paymentAllocations || []);
     } else {
@@ -257,7 +258,7 @@ export const DocumentEditorModal: React.FC<DocumentEditorModalProps> = ({
       setNotes(businessSettings.defaultNotes || '');
       setPaymentReceivedDate(new Date().toISOString().split('T')[0]);
       setPaymentMethods([
-        { id: 'pm_' + Date.now(), type: 'bank_transfer', amount: 0 }
+        { id: 'pm_' + Date.now(), type: 'bank_transfer', amount: 0, isDirectTransferConfirmed: true }
       ]);
       setPaymentAllocations([]);
       setLineItems([
@@ -476,7 +477,16 @@ export const DocumentEditorModal: React.FC<DocumentEditorModalProps> = ({
       includedRevisions: includedRevisions.trim() || undefined,
       exclusions: exclusions.trim() || undefined,
       paymentReceivedDate: docType === 'receipt' ? (paymentReceivedDate || docDate) : undefined,
-      paymentMethods: docType === 'receipt' ? paymentMethods : undefined,
+      paymentMethods: docType === 'receipt' ? paymentMethods.map(m => {
+        if (m.type === 'bank_transfer') {
+          return {
+            ...m,
+            referenceNumber: m.referenceNumber?.trim() || 'העברה בנקאית ישירה',
+            isDirectTransferConfirmed: m.isDirectTransferConfirmed !== false,
+          };
+        }
+        return m;
+      }) : undefined,
       paymentAllocations: docType === 'receipt' && paymentAllocations.length > 0 ? paymentAllocations : undefined,
       isPaperReceipt: docType === 'receipt' ? isPaperReceipt : undefined,
       deliveryMethod: docType === 'receipt' ? (isPaperReceipt ? 'paper' : 'electronic') : undefined,
@@ -1088,6 +1098,7 @@ export const DocumentEditorModal: React.FC<DocumentEditorModalProps> = ({
                               id: 'pm_' + Date.now(),
                               type: 'bank_transfer',
                               amount: 0,
+                              isDirectTransferConfirmed: true,
                             }
                           ]);
                         }}
@@ -1196,7 +1207,7 @@ export const DocumentEditorModal: React.FC<DocumentEditorModalProps> = ({
                                 <label className="flex items-center gap-2 text-xs text-warm-800 cursor-pointer">
                                   <input
                                     type="checkbox"
-                                    checked={pm.isDirectTransferConfirmed || false}
+                                    checked={pm.isDirectTransferConfirmed !== false}
                                     onChange={e => {
                                       const checked = e.target.checked;
                                       setPaymentMethods(prev => prev.map((m, i) => i === idx ? { ...m, isDirectTransferConfirmed: checked } : m));

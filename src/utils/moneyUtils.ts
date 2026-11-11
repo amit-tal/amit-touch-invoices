@@ -296,23 +296,72 @@ export const getStatusBadgeInfo = (
   status: string,
   type?: string
 ): { label: string; bgClass: string; textClass: string } => {
+  // 1. Receipts (קבלה - feminine in Hebrew)
+  if (type === 'receipt') {
+    if (status === 'draft') {
+      return { label: 'טיוטה', bgClass: 'bg-warm-100', textClass: 'text-warm-700' };
+    }
+    if (status === 'canceled') {
+      return { label: 'בוטלה', bgClass: 'bg-gray-100', textClass: 'text-gray-600' };
+    }
+    // Any issued receipt (including partial payment receipts) displays "הופקה"
+    return {
+      label: 'הופקה',
+      bgClass: 'bg-emerald-100',
+      textClass: 'text-emerald-800',
+    };
+  }
+
+  // 2. Payment Requests (חשבון עסקה / דרישת תשלום)
+  if (type === 'payment_request') {
+    switch (status) {
+      case 'draft':
+        return { label: 'טיוטה', bgClass: 'bg-warm-100', textClass: 'text-warm-700' };
+      case 'issued':
+        return {
+          label: 'ממתין לתשלום',
+          bgClass: 'bg-rose-100/70',
+          textClass: 'text-[#88463F]',
+        };
+      case 'partially_paid':
+        return { label: 'שולם חלקית', bgClass: 'bg-amber-100', textClass: 'text-amber-800' };
+      case 'paid':
+        return { label: 'שולם במלואו', bgClass: 'bg-emerald-100', textClass: 'text-emerald-800' };
+      case 'canceled':
+        return { label: 'בוטל', bgClass: 'bg-gray-100', textClass: 'text-gray-600' };
+      default:
+        return { label: status, bgClass: 'bg-warm-100', textClass: 'text-warm-700' };
+    }
+  }
+
+  // 3. Quotes (הצעת מחיר)
+  if (type === 'quote') {
+    switch (status) {
+      case 'draft':
+        return { label: 'טיוטה', bgClass: 'bg-warm-100', textClass: 'text-warm-700' };
+      case 'issued':
+        return { label: 'הופקה', bgClass: 'bg-blue-100', textClass: 'text-blue-800' };
+      case 'accepted':
+        return { label: 'הצעה אושרה', bgClass: 'bg-emerald-100', textClass: 'text-emerald-800' };
+      case 'rejected':
+        return { label: 'הצעה נדחתה', bgClass: 'bg-red-100', textClass: 'text-red-800' };
+      case 'canceled':
+        return { label: 'בוטלה', bgClass: 'bg-gray-100', textClass: 'text-gray-600' };
+      default:
+        return { label: status, bgClass: 'bg-warm-100', textClass: 'text-warm-700' };
+    }
+  }
+
+  // Fallback for general status
   switch (status) {
     case 'draft':
       return { label: 'טיוטה', bgClass: 'bg-warm-100', textClass: 'text-warm-700' };
     case 'issued':
-      return {
-        label: type === 'quote' ? 'נשלחה' : 'ממתין לתשלום',
-        bgClass: 'bg-rose-100/70',
-        textClass: 'text-[#88463F]',
-      };
+      return { label: 'הופק', bgClass: 'bg-rose-100/70', textClass: 'text-[#88463F]' };
     case 'partially_paid':
       return { label: 'שולם חלקית', bgClass: 'bg-amber-100', textClass: 'text-amber-800' };
     case 'paid':
       return { label: 'שולם במלואו', bgClass: 'bg-emerald-100', textClass: 'text-emerald-800' };
-    case 'accepted':
-      return { label: 'הצעה אושרה', bgClass: 'bg-emerald-100', textClass: 'text-emerald-800' };
-    case 'rejected':
-      return { label: 'הצעה נדחתה', bgClass: 'bg-red-100', textClass: 'text-red-800' };
     case 'canceled':
       return { label: 'בוטל', bgClass: 'bg-gray-100', textClass: 'text-gray-600' };
     default:
