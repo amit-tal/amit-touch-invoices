@@ -115,7 +115,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
         .reduce((sum, e) => sum + e.durationSeconds, 0)
     : 0;
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
       setError('יש להזין שם פרויקט');
@@ -136,17 +136,20 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
       parsedRate = Math.round(num * 100) / 100;
     }
 
-    if (editingProject) {
-      updateProject({
-        ...editingProject,
-        name: name.trim(),
-        clientId,
-        color,
-        icon,
-        hourlyRate: parsedRate,
-      });
-    } else {
-      addProject(name.trim(), clientId, icon, color, parsedRate);
+    const res = editingProject
+      ? await updateProject({
+          ...editingProject,
+          name: name.trim(),
+          clientId,
+          color,
+          icon,
+          hourlyRate: parsedRate,
+        })
+      : await addProject(name.trim(), clientId, icon, color, parsedRate);
+
+    if (!res.success) {
+      setError(res.error || 'שגיאה בשמירת הפרויקט בשרת');
+      return;
     }
 
     closeModal();

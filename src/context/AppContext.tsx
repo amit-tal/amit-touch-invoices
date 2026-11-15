@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import type { ReactNode } from 'react';
 import type { Client, Project, TimeEntry, ActiveTimer, Settings, ViewType, ElectronicDeliveryConsent } from '../types';
 import { toISODateString, toTimeString, calculateDurationFromTimes } from '../utils/dateUtils';
+import { evaluateAppDataSync, type SyncConflictInfo } from '../utils/syncGuard';
 
 export function getViewFromPath(pathname: string): ViewType {
   const clean = pathname.toLowerCase().replace(/\/+$/, '');
@@ -35,18 +36,17 @@ interface AppContextType {
   setSelectedProjectFilter: (projectId: string | null) => void;
 
   // Timer actions
-  startTimer: (clientId: string, projectId: string, task: string) => { success: boolean; error?: string };
-  stopTimer: () => void;
-  cancelTimer: () => void;
+  startTimer: (clientId: string, projectId: string, task: string) => Promise<{ success: boolean; error?: string }>;
+  stopTimer: () => Promise<{ success: boolean; error?: string }>;
+  cancelTimer: () => Promise<{ success: boolean; error?: string }>;
   isTimerReminderActive: boolean;
   snoozeTimerReminder: (minutes?: number) => void;
-  fixTimerEndTime: (endTime: string) => { success: boolean; error?: string };
-  refreshAppData: () => Promise<void>;
+  fixTimerEndTime: (endTime: string) => Promise<{ success: boolean; error?: string }>;
 
   // Entry actions
-  addEntry: (entry: Omit<TimeEntry, 'id' | 'createdAt'>) => void;
-  updateEntry: (entry: TimeEntry) => void;
-  deleteEntry: (id: string) => void;
+  addEntry: (entry: Omit<TimeEntry, 'id' | 'createdAt'>) => Promise<{ success: boolean; error?: string; entry?: TimeEntry }>;
+  updateEntry: (entry: TimeEntry) => Promise<{ success: boolean; error?: string }>;
+  deleteEntry: (id: string) => Promise<{ success: boolean; error?: string }>;
 
   // Client actions
   addClient: (
@@ -58,8 +58,8 @@ interface AppContextType {
     email?: string,
     address?: string,
     electronicConsent?: ElectronicDeliveryConsent
-  ) => Client;
-  updateClient: (client: Client) => void;
+  ) => Promise<{ success: boolean; client?: Client; error?: string }>;
+  updateClient: (client: Client) => Promise<{ success: boolean; error?: string }>;
   deleteClient: (id: string) => Promise<{ success: boolean; error?: string }>;
   getClientStats: (id: string) => { projectCount: number; entryCount: number };
 
@@ -70,19 +70,24 @@ interface AppContextType {
     icon?: string,
     color?: string,
     hourlyRate?: number | null
-  ) => Project;
-  updateProject: (project: Project) => void;
+  ) => Promise<{ success: boolean; project?: Project; error?: string }>;
+  updateProject: (project: Project) => Promise<{ success: boolean; error?: string }>;
   deleteProject: (id: string) => Promise<{ success: boolean; error?: string }>;
   getProjectStats: (id: string) => { entryCount: number };
 
   // Settings & Work Data Reset
-  updateSettings: (settings: Partial<Settings>) => void;
+  updateSettings: (settings: Partial<Settings>) => Promise<{ success: boolean; error?: string }>;
   clearAllWorkData: () => void;
   clearDemoData: () => void;
 
-  // Toast notifications
+  // Toast notifications & Sync guard
   toastMessage: string | null;
   showToast: (msg: string) => void;
+  appSyncConflict: SyncConflictInfo | null;
+  isEphemeralServerWarning: boolean;
+  refreshAppData: (options?: { forceOverwrite?: boolean }) => Promise<void>;
+  forceAcceptServerAppData: () => Promise<void>;
+  dismissAppSyncConflict: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -250,6 +255,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   });
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [appSyncConflict, setAppSyncConflict] = useState<SyncConflictInfo | null>(null);
+  const [isEphemeralServerWarning, setIsEphemeralServerWarning] = useState<boolean>(false);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -257,6 +264,41 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setToastMessage(prev => (prev === msg ? null : prev));
     }, 3500);
   };
+
+  const postDurableJson = useCallback(async (url: string, payload: unknown, fallbackError: string) => {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.status === 401) {
+        try {
+          window.dispatchEvent(new CustomEvent('amit-auth-expired'));
+        } catch {}
+        return {
+          ok: false as const,
+          status: 401,
+          error: 'פג תוקף ההתחברות. יש להתחבר מחדש ולשמור שוב.',
+        };
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.success === false) {
+        return {
+          ok: false as const,
+          status: res.status,
+          error: typeof data?.error === 'string' && data.error ? data.error : fallbackError,
+        };
+      }
+      return { ok: true as const, status: res.status, data };
+    } catch {
+      return {
+        ok: false as const,
+        status: 0,
+        error: 'שגיאת תקשורת עם השרת. הנתונים לא נשמרו — יש לבדוק חיבור ולנסות שוב.',
+      };
+    }
+  }, []);
 
   const navigateTo = useCallback((
     view: ViewType, 
@@ -391,7 +433,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     showToast(`התזכורת נדחתה ב-${minutes} דקות`);
   }, []);
 
-  const fixTimerEndTime = useCallback((endTime: string): { success: boolean; error?: string } => {
+  const fixTimerEndTime = useCallback(async (endTime: string): Promise<{ success: boolean; error?: string }> => {
     if (!activeTimer || !activeTimer.isRunning) {
       return { success: false, error: 'אין טיימר פעיל' };
     }
@@ -404,6 +446,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return { success: false, error: `שעת הסיום (${endTime}) חייבת להיות מאוחרת משעת ההתחלה (${startTime})` };
     }
 
+    const nowIso = new Date().toISOString();
     const newEntry: TimeEntry = {
       id: 'entry_' + Date.now(),
       clientId: activeTimer.clientId,
@@ -413,41 +456,126 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       startTime,
       endTime,
       durationSeconds,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
+      updatedAt: nowIso,
     };
 
-    setEntries(prev => [newEntry, ...prev]);
+    const saveRes = await postDurableJson('/api/app-data/entry/save', newEntry, 'שגיאה בשמירת רשומת הזמן המתוקנת');
+    if (!saveRes.ok) {
+      showToast(saveRes.error);
+      return { success: false, error: saveRes.error };
+    }
+
+    const nextEntries = [newEntry, ...entries];
+    setEntries(nextEntries);
+    localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(nextEntries));
     setActiveTimer(null);
     setElapsedSeconds(0);
     setTimerSnoozedUntil(null);
+    localStorage.removeItem(STORAGE_KEYS.ACTIVE_TIMER);
+
+    await postDurableJson('/api/app-data/timer', { activeTimer: null }, 'שגיאה בניקוי הטיימר בשרת');
     showToast('רשומת הזמן תוקנה ונשמרה בהצלחה');
-
-    fetch('/api/app-data/entry/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newEntry),
-    }).catch(err => console.error('Error saving corrected entry:', err));
-
     return { success: true };
-  }, [activeTimer]);
+  }, [activeTimer, entries, postDurableJson]);
 
   // Synchronize state with persistent server storage on mount or refresh
-  const refreshAppData = useCallback(async () => {
+  const refreshAppData = useCallback(async (options?: { forceOverwrite?: boolean }) => {
     try {
       const res = await fetch('/api/app-data');
+      if (res.status === 401) {
+        try {
+          window.dispatchEvent(new CustomEvent('amit-auth-expired'));
+        } catch {}
+        return;
+      }
       if (!res.ok) return;
       const data = await res.json();
-      if (Array.isArray(data.clients) && (data.clients.length > 0 || !localStorage.getItem(STORAGE_KEYS.CLIENTS))) {
+
+      if (data?.syncMeta?.isEphemeralWarning) {
+        setIsEphemeralServerWarning(true);
+      } else if (data?.storageStatus?.backend === 'postgres' && data?.storageStatus?.isDurable) {
+        setIsEphemeralServerWarning(false);
+      }
+
+      const readLocalArray = <T,>(key: string): T[] => {
+        try {
+          const raw = localStorage.getItem(key);
+          const parsed = raw ? JSON.parse(raw) : [];
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      };
+
+      let localClients = readLocalArray<Client>(STORAGE_KEYS.CLIENTS);
+      let localProjects = readLocalArray<Project>(STORAGE_KEYS.PROJECTS);
+      let localEntries = readLocalArray<TimeEntry>(STORAGE_KEYS.ENTRIES);
+
+      if (!options?.forceOverwrite) {
+        const evaluation = evaluateAppDataSync({
+          localClients,
+          localProjects,
+          localEntries,
+          serverData: data,
+        });
+
+        // Apply server deletion tombstones so deleted records are not resurrected locally
+        if (evaluation.prunedClientIds && evaluation.prunedClientIds.length > 0) {
+          const prunedSet = new Set(evaluation.prunedClientIds);
+          localClients = localClients.filter(c => !prunedSet.has(c.id));
+          setClients(localClients);
+          localStorage.setItem(STORAGE_KEYS.CLIENTS, JSON.stringify(localClients));
+        }
+        if (evaluation.prunedProjectIds && evaluation.prunedProjectIds.length > 0) {
+          const prunedSet = new Set(evaluation.prunedProjectIds);
+          localProjects = localProjects.filter(p => !prunedSet.has(p.id));
+          setProjects(localProjects);
+          localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(localProjects));
+        }
+        if (evaluation.prunedEntryIds && evaluation.prunedEntryIds.length > 0) {
+          const prunedSet = new Set(evaluation.prunedEntryIds);
+          localEntries = localEntries.filter(e => !prunedSet.has(e.id));
+          setEntries(localEntries);
+          localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(localEntries));
+        }
+
+        if (evaluation.shouldPauseSync) {
+          try {
+            localStorage.setItem(
+              'amit_recovery_hold_app',
+              JSON.stringify({
+                capturedAt: new Date().toISOString(),
+                reason: evaluation.reason,
+                clients: localClients,
+                projects: localProjects,
+                entries: localEntries,
+              })
+            );
+          } catch {}
+          setAppSyncConflict(evaluation);
+          showToast(evaluation.message || 'הסנכרון הושהה למניעת איבוד נתונים מקומיים');
+          return;
+        }
+      }
+
+      setAppSyncConflict(null);
+      if (Array.isArray(data.clients)) {
         setClients(data.clients);
         localStorage.setItem(STORAGE_KEYS.CLIENTS, JSON.stringify(data.clients));
       }
-      if (Array.isArray(data.projects) && (data.projects.length > 0 || !localStorage.getItem(STORAGE_KEYS.PROJECTS))) {
+      if (Array.isArray(data.projects)) {
         setProjects(data.projects);
         localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(data.projects));
       }
-      if (Array.isArray(data.entries) && (data.entries.length > 0 || !localStorage.getItem(STORAGE_KEYS.ENTRIES))) {
+      if (Array.isArray(data.entries)) {
         setEntries(data.entries);
         localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(data.entries));
+      }
+      if (data.settings && typeof data.settings === 'object') {
+        const mergedSettings: Settings = { ...DEFAULT_SETTINGS, ...data.settings };
+        setSettings(mergedSettings);
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(mergedSettings));
       }
 
       // Sync active running timer from server
@@ -458,12 +586,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           if (timerData.activeTimer && timerData.activeTimer.isRunning) {
             setActiveTimer(timerData.activeTimer);
             localStorage.setItem(STORAGE_KEYS.ACTIVE_TIMER, JSON.stringify(timerData.activeTimer));
+          } else {
+            setActiveTimer(null);
+            localStorage.removeItem(STORAGE_KEYS.ACTIVE_TIMER);
           }
         }
       } catch {}
     } catch (err) {
       console.error('Failed to refresh server app data:', err);
     }
+  }, []);
+
+  const forceAcceptServerAppData = useCallback(async () => {
+    await refreshAppData({ forceOverwrite: true });
+  }, [refreshAppData]);
+
+  const dismissAppSyncConflict = useCallback(() => {
+    setAppSyncConflict(null);
   }, []);
 
   useEffect(() => {
@@ -498,7 +637,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [activeTimer]);
 
   // Start Timer
-  const startTimer = (clientId: string, projectId: string, task: string) => {
+  const startTimer = async (clientId: string, projectId: string, task: string): Promise<{ success: boolean; error?: string }> => {
     if (!clientId) {
       return { success: false, error: 'יש לבחור לקוח' };
     }
@@ -517,26 +656,29 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       isRunning: true,
     };
 
+    const saveRes = await postDurableJson('/api/app-data/timer', { activeTimer: newTimer }, 'שגיאה בהפעלת הטיימר בשרת');
+    if (!saveRes.ok) {
+      showToast(saveRes.error);
+      return { success: false, error: saveRes.error };
+    }
+
     setActiveTimer(newTimer);
     localStorage.setItem(STORAGE_KEYS.ACTIVE_TIMER, JSON.stringify(newTimer));
-    fetch('/api/app-data/timer', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activeTimer: newTimer }),
-    }).catch(e => console.error('Error saving running timer to server:', e));
-
     showToast('הטיימר הופעל בהצלחה');
     return { success: true };
   };
 
   // Stop Timer
-  const stopTimer = () => {
-    if (!activeTimer || !activeTimer.isRunning) return;
+  const stopTimer = async (): Promise<{ success: boolean; error?: string }> => {
+    if (!activeTimer || !activeTimer.isRunning) {
+      return { success: false, error: 'אין טיימר פעיל' };
+    }
 
     const stopTime = Date.now();
     const durationSeconds = Math.max(1, Math.floor((stopTime - activeTimer.startTimestamp) / 1000));
     const startDate = new Date(activeTimer.startTimestamp);
     const endDate = new Date(stopTime);
+    const nowIso = new Date().toISOString();
 
     const newEntry: TimeEntry = {
       id: 'entry_' + Date.now(),
@@ -547,8 +689,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       startTime: toTimeString(startDate),
       endTime: toTimeString(endDate),
       durationSeconds,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
+      updatedAt: nowIso,
     };
+
+    const saveRes = await postDurableJson('/api/app-data/entry/save', newEntry, 'שגיאה בשמירת רשומת הזמן בשרת');
+    if (!saveRes.ok) {
+      showToast(saveRes.error);
+      return { success: false, error: saveRes.error };
+    }
 
     const updated = [newEntry, ...entries];
     setEntries(updated);
@@ -557,102 +706,83 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setElapsedSeconds(0);
     localStorage.removeItem(STORAGE_KEYS.ACTIVE_TIMER);
 
-    // Persist new entry to server
-    fetch('/api/app-data/entry/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newEntry),
-    }).catch(e => console.error('Error saving stopped timer entry to server:', e));
-
-    // Clear running timer on server
-    fetch('/api/app-data/timer', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activeTimer: null }),
-    }).catch(e => console.error('Error clearing timer on server:', e));
-
+    await postDurableJson('/api/app-data/timer', { activeTimer: null }, 'שגיאה בניקוי הטיימר בשרת');
     showToast('רשומת הזמן נשמרה בהצלחה');
+    return { success: true };
   };
 
   // Cancel running timer without saving
-  const cancelTimer = () => {
+  const cancelTimer = async (): Promise<{ success: boolean; error?: string }> => {
+    const clearRes = await postDurableJson('/api/app-data/timer', { activeTimer: null }, 'שגיאה בביטול הטיימר בשרת');
+    if (!clearRes.ok) {
+      showToast(clearRes.error);
+      return { success: false, error: clearRes.error };
+    }
     setActiveTimer(null);
     setElapsedSeconds(0);
     localStorage.removeItem(STORAGE_KEYS.ACTIVE_TIMER);
-    fetch('/api/app-data/timer', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activeTimer: null }),
-    }).catch(e => console.error('Error clearing timer on server:', e));
     showToast('הטיימר בוטל');
+    return { success: true };
   };
 
   // Manual / Edit Entry actions
-  const addEntry = async (entryData: Omit<TimeEntry, 'id' | 'createdAt'>) => {
+  const addEntry = async (entryData: Omit<TimeEntry, 'id' | 'createdAt'>): Promise<{ success: boolean; error?: string; entry?: TimeEntry }> => {
+    const nowIso = new Date().toISOString();
     const newEntry: TimeEntry = {
       ...entryData,
       id: 'entry_' + Date.now(),
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
+      updatedAt: nowIso,
     };
+
+    const saveRes = await postDurableJson('/api/app-data/entry/save', newEntry, 'שגיאה בשמירת הרשומה בשרת');
+    if (!saveRes.ok) {
+      showToast(saveRes.error);
+      return { success: false, error: saveRes.error };
+    }
+
     const updated = [newEntry, ...entries];
     setEntries(updated);
     localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(updated));
-
-    try {
-      await fetch('/api/app-data/entry/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newEntry),
-      });
-      showToast('הרשומה נוספה בהצלחה');
-    } catch (e) {
-      console.error('Server save error:', e);
-    }
+    showToast('הרשומה נוספה בהצלחה');
+    return { success: true, entry: newEntry };
   };
 
-  const updateEntry = async (updatedEntry: TimeEntry) => {
-    const updated = entries.map(e => (e.id === updatedEntry.id ? updatedEntry : e));
+  const updateEntry = async (updatedEntry: TimeEntry): Promise<{ success: boolean; error?: string }> => {
+    const payload: TimeEntry = {
+      ...updatedEntry,
+      updatedAt: new Date().toISOString(),
+    };
+    const saveRes = await postDurableJson('/api/app-data/entry/save', payload, 'שגיאה בעדכון הרשומה בשרת');
+    if (!saveRes.ok) {
+      showToast(saveRes.error);
+      return { success: false, error: saveRes.error };
+    }
+
+    const updated = entries.map(e => (e.id === payload.id ? payload : e));
     setEntries(updated);
     localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(updated));
-
-    try {
-      await fetch('/api/app-data/entry/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedEntry),
-      });
-      showToast('הרשומה עודכנה בהצלחה');
-    } catch (e) {
-      console.error('Server save error:', e);
-    }
+    showToast('הרשומה עודכנה בהצלחה');
+    return { success: true };
   };
 
-  const deleteEntry = async (id: string) => {
-    try {
-      const res = await fetch('/api/app-data/entry/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      });
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || 'שגיאה במחיקת הרשומה מהשרת');
-      }
-
-      const updated = entries.filter(e => e.id !== id);
-      setEntries(updated);
-      localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(updated));
-      showToast('הרשומה נמחקה בהצלחה');
-    } catch (err: any) {
-      console.error('Delete entry failed:', err);
-      showToast(err.message || 'שגיאה במחיקת הרשומה');
+  const deleteEntry = async (id: string): Promise<{ success: boolean; error?: string }> => {
+    const delRes = await postDurableJson('/api/app-data/entry/delete', { id }, 'שגיאה במחיקת הרשומה מהשרת');
+    if (!delRes.ok) {
+      showToast(delRes.error);
+      return { success: false, error: delRes.error };
     }
+
+    const updated = entries.filter(e => e.id !== id);
+    setEntries(updated);
+    localStorage.setItem(STORAGE_KEYS.ENTRIES, JSON.stringify(updated));
+    showToast('הרשומה נמחקה בהצלחה');
+    return { success: true };
   };
 
   // Client actions
-  const addClient = (
-    name: string, 
+  const addClient = async (
+    name: string,
     color: string = '#BC796F',
     businessNumber?: string,
     paymentTerms?: string,
@@ -660,7 +790,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     email?: string,
     address?: string,
     electronicConsent?: ElectronicDeliveryConsent
-  ): Client => {
+  ): Promise<{ success: boolean; client?: Client; error?: string }> => {
+    const nowIso = new Date().toISOString();
     const newClient: Client = {
       id: 'client_' + Date.now(),
       name: name.trim(),
@@ -671,34 +802,39 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       email: email?.trim() || undefined,
       address: address?.trim() || undefined,
       electronicConsent,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
+      updatedAt: nowIso,
     };
+
+    const saveRes = await postDurableJson('/api/app-data/client/save', newClient, 'שגיאה בשמירת הלקוח בשרת');
+    if (!saveRes.ok) {
+      showToast(saveRes.error);
+      return { success: false, error: saveRes.error };
+    }
+
     const updated = [...clients, newClient];
     setClients(updated);
     localStorage.setItem(STORAGE_KEYS.CLIENTS, JSON.stringify(updated));
-
-    fetch('/api/app-data/client/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newClient),
-    }).catch(e => console.error('Server save client error:', e));
-
     showToast(`הלקוח "${newClient.name}" נוסף בהצלחה`);
-    return newClient;
+    return { success: true, client: newClient };
   };
 
-  const updateClient = (updatedClient: Client) => {
-    const updated = clients.map(c => (c.id === updatedClient.id ? updatedClient : c));
+  const updateClient = async (updatedClient: Client): Promise<{ success: boolean; error?: string }> => {
+    const payload: Client = {
+      ...updatedClient,
+      updatedAt: new Date().toISOString(),
+    };
+    const saveRes = await postDurableJson('/api/app-data/client/save', payload, 'שגיאה בעדכון פרטי הלקוח בשרת');
+    if (!saveRes.ok) {
+      showToast(saveRes.error);
+      return { success: false, error: saveRes.error };
+    }
+
+    const updated = clients.map(c => (c.id === payload.id ? payload : c));
     setClients(updated);
     localStorage.setItem(STORAGE_KEYS.CLIENTS, JSON.stringify(updated));
-
-    fetch('/api/app-data/client/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedClient),
-    }).catch(e => console.error('Server save client error:', e));
-
     showToast('פרטי הלקוח עודכנו');
+    return { success: true };
   };
 
   const getClientStats = (id: string) => {
@@ -724,6 +860,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
       });
+
+      if (res.status === 401) {
+        try {
+          window.dispatchEvent(new CustomEvent('amit-auth-expired'));
+        } catch {}
+        throw new Error('פג תוקף ההתחברות. יש להתחבר מחדש.');
+      }
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
@@ -760,13 +903,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // Project actions
-  const addProject = (
+  const addProject = async (
     name: string,
     clientId: string,
     icon: string = 'Folder',
     color: string = '#BC796F',
     hourlyRate?: number | null
-  ): Project => {
+  ): Promise<{ success: boolean; project?: Project; error?: string }> => {
+    const nowIso = new Date().toISOString();
     const newProject: Project = {
       id: 'project_' + Date.now(),
       name: name.trim(),
@@ -774,34 +918,39 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       icon,
       color,
       hourlyRate: typeof hourlyRate === 'number' && hourlyRate >= 0 ? hourlyRate : undefined,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
+      updatedAt: nowIso,
     };
+
+    const saveRes = await postDurableJson('/api/app-data/project/save', newProject, 'שגיאה בשמירת הפרויקט בשרת');
+    if (!saveRes.ok) {
+      showToast(saveRes.error);
+      return { success: false, error: saveRes.error };
+    }
+
     const updated = [...projects, newProject];
     setProjects(updated);
     localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(updated));
-
-    fetch('/api/app-data/project/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newProject),
-    }).catch(e => console.error('Server save project error:', e));
-
     showToast(`הפרויקט "${newProject.name}" נוצר בהצלחה`);
-    return newProject;
+    return { success: true, project: newProject };
   };
 
-  const updateProject = (updatedProject: Project) => {
-    const updated = projects.map(p => (p.id === updatedProject.id ? updatedProject : p));
+  const updateProject = async (updatedProject: Project): Promise<{ success: boolean; error?: string }> => {
+    const payload: Project = {
+      ...updatedProject,
+      updatedAt: new Date().toISOString(),
+    };
+    const saveRes = await postDurableJson('/api/app-data/project/save', payload, 'שגיאה בעדכון הפרויקט בשרת');
+    if (!saveRes.ok) {
+      showToast(saveRes.error);
+      return { success: false, error: saveRes.error };
+    }
+
+    const updated = projects.map(p => (p.id === payload.id ? payload : p));
     setProjects(updated);
     localStorage.setItem(STORAGE_KEYS.PROJECTS, JSON.stringify(updated));
-
-    fetch('/api/app-data/project/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedProject),
-    }).catch(e => console.error('Server save project error:', e));
-
     showToast('הפרויקט עודכן');
+    return { success: true };
   };
 
   const getProjectStats = (id: string) => {
@@ -825,6 +974,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
       });
+
+      if (res.status === 401) {
+        try {
+          window.dispatchEvent(new CustomEvent('amit-auth-expired'));
+        } catch {}
+        throw new Error('פג תוקף ההתחברות. יש להתחבר מחדש.');
+      }
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
@@ -855,9 +1011,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // Settings
-  const updateSettings = (partial: Partial<Settings>) => {
-    setSettings(prev => ({ ...prev, ...partial }));
+  const updateSettings = async (partial: Partial<Settings>): Promise<{ success: boolean; error?: string }> => {
+    const nextSettings: Settings = { ...settings, ...partial };
+    const saveRes = await postDurableJson('/api/app-data/settings', nextSettings, 'שגיאה בשמירת ההגדרות בשרת');
+    if (!saveRes.ok) {
+      showToast(saveRes.error);
+      return { success: false, error: saveRes.error };
+    }
+
+    setSettings(nextSettings);
+    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(nextSettings));
     showToast('ההגדרות נשמרו');
+    return { success: true };
   };
 
   // Clear demo data specifically
@@ -927,10 +1092,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         clearDemoData,
         toastMessage,
         showToast,
+        appSyncConflict,
+        isEphemeralServerWarning,
         isTimerReminderActive,
         snoozeTimerReminder,
         fixTimerEndTime,
         refreshAppData,
+        forceAcceptServerAppData,
+        dismissAppSyncConflict,
       }}
     >
       {children}

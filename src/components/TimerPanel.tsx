@@ -58,10 +58,13 @@ export const TimerPanel: React.FC<TimerPanelProps> = ({
     }
   }, [selectedClientId, availableProjects, selectedProjectId, activeTimer]);
 
-  const handleStartStop = () => {
+  const handleStartStop = async () => {
     setValidationError(null);
     if (activeTimer?.isRunning) {
-      stopTimer();
+      const res = await stopTimer();
+      if (!res.success && res.error) {
+        setValidationError(res.error);
+      }
     } else {
       if (!selectedClientId) {
         setValidationError('יש לבחור לקוח');
@@ -71,7 +74,7 @@ export const TimerPanel: React.FC<TimerPanelProps> = ({
         setValidationError('יש לבחור פרויקט');
         return;
       }
-      const res = startTimer(selectedClientId, selectedProjectId, taskDescription);
+      const res = await startTimer(selectedClientId, selectedProjectId, taskDescription);
       if (!res.success && res.error) {
         setValidationError(res.error);
       }

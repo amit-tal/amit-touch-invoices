@@ -1,9 +1,15 @@
 import fs from 'fs';
 import path from 'path';
 import nodemailer from 'nodemailer';
+import {
+  resolveDataDir,
+  persistFilePath,
+  deletePersistedFilePath,
+} from './persistentStore.ts';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const GMAIL_TOKENS_FILE = path.join(DATA_DIR, 'gmailTokens.json');
+function getGmailTokensFile(): string {
+  return path.join(resolveDataDir(), 'gmailTokens.json');
+}
 
 export interface GmailTokenData {
   connected: boolean;
@@ -27,11 +33,12 @@ export interface GmailOAuthStatus {
  * Read stored Gmail tokens from data/gmailTokens.json
  */
 export function getStoredGmailTokens(): GmailTokenData | null {
-  if (!fs.existsSync(GMAIL_TOKENS_FILE)) {
+  const file = getGmailTokensFile();
+  if (!fs.existsSync(file)) {
     return null;
   }
   try {
-    const raw = fs.readFileSync(GMAIL_TOKENS_FILE, 'utf8');
+    const raw = fs.readFileSync(file, 'utf8');
     const data = JSON.parse(raw);
     if (data && data.connected && data.refreshToken) {
       return data;
@@ -46,24 +53,30 @@ export function getStoredGmailTokens(): GmailTokenData | null {
  * Save Gmail tokens to data/gmailTokens.json
  */
 export function saveGmailTokens(tokens: GmailTokenData): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  const dataDir = resolveDataDir();
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
   }
-  fs.writeFileSync(GMAIL_TOKENS_FILE, JSON.stringify(tokens, null, 2), {
+  const file = getGmailTokensFile();
+  const content = JSON.stringify(tokens, null, 2);
+  fs.writeFileSync(file, content, {
     encoding: 'utf8',
     mode: 0o600,
   });
+  persistFilePath(file, content);
 }
 
 /**
  * Clear stored Gmail tokens (disconnect)
  */
 export function clearGmailTokens(): void {
-  if (fs.existsSync(GMAIL_TOKENS_FILE)) {
+  const file = getGmailTokensFile();
+  if (fs.existsSync(file)) {
     try {
-      fs.unlinkSync(GMAIL_TOKENS_FILE);
+      fs.unlinkSync(file);
     } catch {}
   }
+  deletePersistedFilePath(file);
 }
 
 /**

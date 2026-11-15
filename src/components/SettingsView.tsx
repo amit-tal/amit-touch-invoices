@@ -106,11 +106,11 @@ export const SettingsView: React.FC = () => {
     }
   }, [businessSettings]);
 
-  const handleSubmitStudio = (e: React.FormEvent) => {
+  const handleSubmitStudio = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSavingStudio(true);
     try {
-      updateSettings({
+      await updateSettings({
         studioName: studioName.trim() || 'AMIT TOUCH',
         defaultHourlyRate: Number(hourlyRate) || 350,
         currency: currency.trim() || '₪',
@@ -121,7 +121,7 @@ export const SettingsView: React.FC = () => {
         },
       });
     } finally {
-      setTimeout(() => setIsSavingStudio(false), 500);
+      setTimeout(() => setIsSavingStudio(false), 300);
     }
   };
 

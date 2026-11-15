@@ -419,15 +419,20 @@ export const DocumentEditorModal: React.FC<DocumentEditorModalProps> = ({
   };
 
   // Handle Quick Add Client
-  const handleQuickAddClient = (e: React.FormEvent) => {
+  const handleQuickAddClient = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickClientName.trim()) return;
-    const newClient = addClient(
+    const res = await addClient(
       quickClientName.trim(),
       '#BC796F',
       quickBusinessNumber.trim() || undefined,
       quickPaymentTerms || undefined
     );
+    if (!res.success || !res.client) {
+      showToast(res.error || 'שגיאה בשמירת הלקוח בשרת');
+      return;
+    }
+    const newClient = res.client;
     setClientId(newClient.id);
     setPaymentTerms(newClient.paymentTerms || businessSettings.defaultPaymentTerms || '');
     setIsQuickAddClientOpen(false);

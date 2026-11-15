@@ -10,11 +10,13 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   isConfigured: boolean;
+  recoveryAvailable: boolean;
   connectionError: string | null;
   retryConnection: () => Promise<void>;
   checkAuthStatus: () => Promise<void>;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string; retryAfter?: number }>;
   setup: (email: string, password: string, setupToken?: string) => Promise<{ success: boolean; error?: string }>;
+  recoverOwner: (email: string, newPassword: string, recoveryKey: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
 }
 
@@ -51,6 +53,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
 
   const [isConfigured, setIsConfigured] = useState<boolean>(true);
+  const [recoveryAvailable, setRecoveryAvailable] = useState<boolean>(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -69,6 +72,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (res.ok) {
         const data = await res.json();
         setIsConfigured(Boolean(data.isConfigured));
+        setRecoveryAvailable(Boolean(data.recoveryAvailable));
         const authenticated = Boolean(data.isAuthenticated ?? data.authenticated);
 
         if (authenticated) {
@@ -118,7 +122,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     checkAuthStatus();
+    const handleAuthExpired = () => {
+      setIsAuthenticated(false);
+      setUser(null);
+      sessionStorage.removeItem(SESSION_HINT_KEY);
+      sessionStorage.removeItem(USER_CACHE_KEY);
+    };
+    window.addEventListener('amit-auth-expired', handleAuthExpired);
     return () => {
+      window.removeEventListener('amit-auth-expired', handleAuthExpired);
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
       }
@@ -205,6 +217,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const recoverOwner = async (email: string, newPassword: string, recoveryKey: string) => {
+    try {
+      // Step 1: Request short-lived single-use recovery ticket
+      const authRes = await fetch('/api/auth/recover/authorize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, recoveryKey }),
+      });
+
+      const authData = await authRes.json().catch(() => ({}));
+      if (!authRes.ok || !authData.ticket) {
+        return {
+          success: false,
+          error: authData.error || 'אימות מפתח שחזור נכשל',
+        };
+      }
+
+      // Step 2: Complete password reset with single-use ticket
+      const completeRes = await fetch('/api/auth/recover/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket: authData.ticket, newPassword, email }),
+      });
+
+      const completeData = await completeRes.json().catch(() => ({}));
+
+      if (completeRes.ok && completeData.success) {
+        const authedUser = completeData.user || { email, role: 'owner' };
+        setIsConfigured(true);
+        setIsAuthenticated(true);
+        setUser(authedUser);
+        sessionStorage.setItem(SESSION_HINT_KEY, 'true');
+        sessionStorage.setItem(USER_CACHE_KEY, JSON.stringify(authedUser));
+        setConnectionError(null);
+        return { success: true };
+      }
+
+      return {
+        success: false,
+        error: completeData.error || 'שחזור החשבון נכשל',
+      };
+    } catch (err) {
+      console.error('Recover owner error:', err);
+      return {
+        success: false,
+        error: 'שגיאת תקשורת בעת שחזור חשבון הבעלים',
+      };
+    }
+  };
+
   const logout = async () => {
     try {
       await fetch('/api/auth/logout', {
@@ -228,11 +290,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAuthenticated,
         isLoading,
         isConfigured,
+        recoveryAvailable,
         connectionError,
         retryConnection,
         checkAuthStatus,
         login,
         setup,
+        recoverOwner,
         logout,
       }}
     >

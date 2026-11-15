@@ -109,7 +109,7 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
     onAddModalClose?.();
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!clientName.trim()) {
       setError('יש להזין שם העסק / לקוח');
@@ -126,29 +126,32 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
       withdrawalReason: 'בוטלה הסכמה על ידי מנהל המערכת',
     } : undefined;
 
-    if (editingClient) {
-      updateClient({
-        ...editingClient,
-        name: clientName.trim(),
-        email: clientEmail.trim() || undefined,
-        address: clientAddress.trim() || undefined,
-        color: clientColor,
-        businessNumber: businessNumber.trim() || undefined,
-        paymentTerms: paymentTerms || undefined,
-        paymentTermsCustom: paymentTerms === 'אחר' ? paymentTermsCustom.trim() : undefined,
-        electronicConsent,
-      });
-    } else {
-      addClient(
-        clientName.trim(), 
-        clientColor,
-        businessNumber.trim() || undefined,
-        paymentTerms || undefined,
-        paymentTerms === 'אחר' ? paymentTermsCustom.trim() : undefined,
-        clientEmail.trim() || undefined,
-        clientAddress.trim() || undefined,
-        electronicConsent
-      );
+    const res = editingClient
+      ? await updateClient({
+          ...editingClient,
+          name: clientName.trim(),
+          email: clientEmail.trim() || undefined,
+          address: clientAddress.trim() || undefined,
+          color: clientColor,
+          businessNumber: businessNumber.trim() || undefined,
+          paymentTerms: paymentTerms || undefined,
+          paymentTermsCustom: paymentTerms === 'אחר' ? paymentTermsCustom.trim() : undefined,
+          electronicConsent,
+        })
+      : await addClient(
+          clientName.trim(),
+          clientColor,
+          businessNumber.trim() || undefined,
+          paymentTerms || undefined,
+          paymentTerms === 'אחר' ? paymentTermsCustom.trim() : undefined,
+          clientEmail.trim() || undefined,
+          clientAddress.trim() || undefined,
+          electronicConsent
+        );
+
+    if (!res.success) {
+      setError(res.error || 'שגיאה בשמירת הלקוח בשרת');
+      return;
     }
 
     closeModal();

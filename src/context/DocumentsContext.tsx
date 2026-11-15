@@ -9,6 +9,7 @@ import type {
   ComplianceBlockers
 } from '../types/documents';
 import { useApp } from './AppContext';
+import { evaluateDocumentsSync, type SyncConflictInfo } from '../utils/syncGuard';
 import { 
   generateTimeBillingDocumentData,
   type TimeBillingLayoutMode 
@@ -93,7 +94,10 @@ interface DocumentsContextType {
   getBilledTimeEntryIds: () => Set<string>;
   isClientReferencedInIssuedDocs: (clientId: string) => boolean;
   isProjectReferencedInIssuedDocs: (projectId: string) => boolean;
-  refreshDocuments: () => Promise<void>;
+  refreshDocuments: (options?: { forceOverwrite?: boolean }) => Promise<void>;
+  documentsSyncConflict: SyncConflictInfo | null;
+  forceAcceptServerDocuments: () => Promise<void>;
+  dismissDocumentsSyncConflict: () => void;
 }
 
 const DocumentsContext = createContext<DocumentsContextType | undefined>(undefined);
@@ -171,6 +175,7 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isTestMode, setIsTestMode] = useState(false);
+  const [documentsSyncConflict, setDocumentsSyncConflict] = useState<SyncConflictInfo | null>(null);
 
   // Sync documents and sequences to client localStorage cache
   useEffect(() => {
@@ -186,13 +191,78 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [sequences]);
 
   // Fetch all documents from server API
-  const refreshDocuments = useCallback(async () => {
+  const refreshDocuments = useCallback(async (options?: { forceOverwrite?: boolean }) => {
     try {
       const res = await fetch('/api/documents');
+      if (res.status === 401) {
+        try {
+          window.dispatchEvent(new CustomEvent('amit-auth-expired'));
+        } catch {}
+        return;
+      }
       if (res.ok) {
         const data = await res.json();
+
+        let localDocs: AppDocument[] = [];
+        let localSeq: SequenceSettings = {
+          isProductionActive: false,
+          paymentRequestNext: 40016,
+          receiptNext: 250020,
+          quoteNext: null,
+          testSequenceNext: 1001,
+          isLocked: false,
+        };
+        try {
+          const cachedDocs = localStorage.getItem(DOCUMENTS_STORAGE_KEY);
+          if (cachedDocs) {
+            const parsed = JSON.parse(cachedDocs);
+            if (Array.isArray(parsed)) localDocs = parsed;
+          }
+          const cachedSeq = localStorage.getItem(SEQUENCES_STORAGE_KEY);
+          if (cachedSeq) {
+            const parsedSeq = JSON.parse(cachedSeq);
+            if (parsedSeq && typeof parsedSeq === 'object') localSeq = parsedSeq;
+          }
+        } catch {}
+
+        if (!options?.forceOverwrite) {
+          const evaluation = evaluateDocumentsSync({
+            localDocuments: localDocs,
+            localSequences: localSeq,
+            serverData: data,
+          });
+          if (evaluation.prunedDocumentIds && evaluation.prunedDocumentIds.length > 0) {
+            const prunedSet = new Set(evaluation.prunedDocumentIds);
+            localDocs = localDocs.filter(d => !prunedSet.has(d.id));
+            setDocuments(localDocs);
+            try {
+              localStorage.setItem(DOCUMENTS_STORAGE_KEY, JSON.stringify(localDocs));
+            } catch {}
+          }
+          if (evaluation.shouldPauseSync) {
+            try {
+              localStorage.setItem(
+                'amit_recovery_hold_docs',
+                JSON.stringify({
+                  capturedAt: new Date().toISOString(),
+                  reason: evaluation.reason,
+                  documents: localDocs,
+                  sequences: localSeq,
+                })
+              );
+            } catch {}
+            setDocumentsSyncConflict(evaluation);
+            showToast(evaluation.message || 'סנכרון המסמכים הושהה למניעת איבוד מסמכים');
+            return;
+          }
+        }
+
+        setDocumentsSyncConflict(null);
         if (Array.isArray(data.documents)) {
           setDocuments(data.documents);
+          try {
+            localStorage.setItem(DOCUMENTS_STORAGE_KEY, JSON.stringify(data.documents));
+          } catch {}
         }
         if (data.sequences) setSequences(data.sequences);
         if (data.business) {
@@ -208,6 +278,14 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     } finally {
       setIsLoading(false);
     }
+  }, []);
+
+  const forceAcceptServerDocuments = useCallback(async () => {
+    await refreshDocuments({ forceOverwrite: true });
+  }, [refreshDocuments]);
+
+  const dismissDocumentsSyncConflict = useCallback(() => {
+    setDocumentsSyncConflict(null);
   }, []);
 
   useEffect(() => {
@@ -954,6 +1032,9 @@ export const DocumentsProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         isClientReferencedInIssuedDocs,
         isProjectReferencedInIssuedDocs,
         refreshDocuments,
+        documentsSyncConflict,
+        forceAcceptServerDocuments,
+        dismissDocumentsSyncConflict,
       }}
     >
       {children}

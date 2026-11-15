@@ -34,13 +34,13 @@ export const ForgottenTimerReminderModal: React.FC = () => {
     setIsFixingEndTime(true);
   };
 
-  const handleSaveFix = (e: React.FormEvent) => {
+  const handleSaveFix = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!correctedEndTime) {
       setFixError('יש להזין שעת סיום תקינה');
       return;
     }
-    const result = fixTimerEndTime(correctedEndTime);
+    const result = await fixTimerEndTime(correctedEndTime);
     if (!result.success && result.error) {
       setFixError(result.error);
     } else {

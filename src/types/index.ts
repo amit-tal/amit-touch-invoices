@@ -27,6 +27,7 @@ export interface Client {
   paymentTermsCustom?: string; // פירוט תנאי התשלום כשאחר נבחר
   isArchived?: boolean;
   createdAt: string;
+  updatedAt?: string;
   email?: string;
   address?: string;
   phone?: string;
@@ -46,6 +47,7 @@ export interface Project {
   budgetHours?: number; // לשמירה על תאימות נתוני עבר בלבד, לא בשימוש בממשק
   isArchived?: boolean;
   createdAt: string;
+  updatedAt?: string;
   description?: string;
 }
 
@@ -59,6 +61,7 @@ export interface TimeEntry {
   endTime: string; // HH:mm
   durationSeconds: number;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface ActiveTimer {

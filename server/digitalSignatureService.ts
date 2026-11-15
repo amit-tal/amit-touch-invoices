@@ -1,18 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { resolveDataDir } from './persistentStore.ts';
 
-/**
- * AMIT TOUCH - Cryptographic PDF Digital Signature Service
- * Conforming to:
- * - Israeli Electronic Signature Law 5761-2001 (חוק חתימה אלקטרונית, תשס״א-2001)
- * - Section 18ב of the Income Tax Directives (סעיף 18ב להוראות מס הכנסה - ניהול פנקסי חשבונות)
- * - Tax Authority Circular 24/2004 (חוזר מס הכנסה 24/2004)
- * - ISO 32000-1 / Adobe PKCS#7 Detached Digital Signature Standard
- */
-
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const SIGNED_DOCS_DIR = path.resolve(DATA_DIR, 'signed_documents');
+function getSignedDocsDir(): string {
+  return path.resolve(resolveDataDir(), 'signed_documents');
+}
 
 export type SignatureCategory = 'certified' | 'secured' | 'none';
 
@@ -44,8 +37,9 @@ export interface SigningConfigStatus {
 
 // Ensure signed documents archive directory exists
 export function ensureSignedDocsStore(): void {
-  if (!fs.existsSync(SIGNED_DOCS_DIR)) {
-    fs.mkdirSync(SIGNED_DOCS_DIR, { recursive: true });
+  const dir = getSignedDocsDir();
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
 }
 

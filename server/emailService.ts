@@ -7,9 +7,11 @@ import {
   getGmailOAuthStatus, 
   sendEmailViaGmailApi 
 } from './gmailService.ts';
+import { resolveDataDir, persistFilePath } from './persistentStore.ts';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const EMAIL_CONFIG_FILE = path.join(DATA_DIR, 'emailConfig.json');
+function getEmailConfigFile(): string {
+  return path.join(resolveDataDir(), 'emailConfig.json');
+}
 
 export type EmailProviderType = 'gmail' | 'resend' | 'brevo' | 'sendgrid' | 'smtp' | 'none';
 
@@ -43,9 +45,10 @@ export function setCustomSmtpTransporter(t: any): void {
  */
 export function getEmailConfig(): EmailConfig {
   let fileConfig: Partial<EmailConfig> = {};
-  if (fs.existsSync(EMAIL_CONFIG_FILE)) {
+  const configFile = getEmailConfigFile();
+  if (fs.existsSync(configFile)) {
     try {
-      fileConfig = JSON.parse(fs.readFileSync(EMAIL_CONFIG_FILE, 'utf8'));
+      fileConfig = JSON.parse(fs.readFileSync(configFile, 'utf8'));
     } catch {
       fileConfig = {};
     }
@@ -122,10 +125,14 @@ export function getEmailConfig(): EmailConfig {
  * Save updated email configuration (called by server admin/setup endpoint)
  */
 export function saveEmailConfig(config: EmailConfig): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  const dataDir = resolveDataDir();
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
   }
-  fs.writeFileSync(EMAIL_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+  const configFile = getEmailConfigFile();
+  const content = JSON.stringify(config, null, 2);
+  fs.writeFileSync(configFile, content, 'utf8');
+  persistFilePath(configFile, content);
 }
 
 export interface EmailProviderStatus {

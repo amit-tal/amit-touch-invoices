@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { documentServerMiddleware } from './documentServerMiddleware.ts';
+import { initPersistentStore, closePersistentStore } from './persistentStore.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -120,14 +121,27 @@ const server = http.createServer(async (req, res) => {
   stream.pipe(res);
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`[AMIT TOUCH] Production server listening at http://${HOST}:${PORT}`);
-  console.log(`[AMIT TOUCH] Static files served from: ${DIST_DIR}`);
-});
+async function startServer() {
+  try {
+    await initPersistentStore();
+  } catch (err) {
+    console.error('[AMIT TOUCH] Persistent storage initialization warning:', err);
+  }
+
+  server.listen(PORT, HOST, () => {
+    console.log(`[AMIT TOUCH] Production server listening at http://${HOST}:${PORT}`);
+    console.log(`[AMIT TOUCH] Static files served from: ${DIST_DIR}`);
+  });
+}
+
+startServer();
 
 const handleShutdown = (signal: string) => {
   console.log(`[AMIT TOUCH] Received ${signal}. Shutting down gracefully...`);
-  server.close(() => {
+  server.close(async () => {
+    try {
+      await closePersistentStore();
+    } catch {}
     console.log('[AMIT TOUCH] HTTP server closed.');
     process.exit(0);
   });

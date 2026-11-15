@@ -94,7 +94,7 @@ export const ManualEntryModal: React.FC<ManualEntryModalProps> = ({
   const calculatedSeconds = calculateDurationFromTimes(startTime, endTime);
   const isTimeOrderValid = calculatedSeconds > 0;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const newErrors: { [key: string]: string } = {};
 
@@ -112,27 +112,30 @@ export const ManualEntryModal: React.FC<ManualEntryModalProps> = ({
       return;
     }
 
-    if (entryToEdit) {
-      updateEntry({
-        ...entryToEdit,
-        clientId,
-        projectId,
-        task: task.trim(),
-        date,
-        startTime,
-        endTime,
-        durationSeconds: calculatedSeconds,
-      });
-    } else {
-      addEntry({
-        clientId,
-        projectId,
-        task: task.trim(),
-        date,
-        startTime,
-        endTime,
-        durationSeconds: calculatedSeconds,
-      });
+    const result = entryToEdit
+      ? await updateEntry({
+          ...entryToEdit,
+          clientId,
+          projectId,
+          task: task.trim(),
+          date,
+          startTime,
+          endTime,
+          durationSeconds: calculatedSeconds,
+        })
+      : await addEntry({
+          clientId,
+          projectId,
+          task: task.trim(),
+          date,
+          startTime,
+          endTime,
+          durationSeconds: calculatedSeconds,
+        });
+
+    if (!result.success) {
+      setErrors({ submit: result.error || 'שגיאה בשמירת הרשומה בשרת' });
+      return;
     }
 
     onClose();
@@ -178,10 +181,10 @@ export const ManualEntryModal: React.FC<ManualEntryModalProps> = ({
         {/* Form */}
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           {/* General Time Order Error */}
-          {errors.timeOrder && (
+          {(errors.timeOrder || errors.submit) && (
             <div className="px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/25 text-red-800 text-xs flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
-              <span>{errors.timeOrder}</span>
+              <span>{errors.submit || errors.timeOrder}</span>
             </div>
           )}
 

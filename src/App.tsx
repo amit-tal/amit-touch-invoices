@@ -15,11 +15,11 @@ import { ProjectsView } from './components/ProjectsView';
 import { ReportsView } from './components/ReportsView';
 import { SettingsView } from './components/SettingsView';
 import { DocumentsView } from './components/documents/DocumentsView';
-import { DocumentsProvider } from './context/DocumentsContext';
+import { DocumentsProvider, useDocuments } from './context/DocumentsContext';
 import { Toast } from './components/Toast';
 import type { TimeEntry } from './types';
 import type { AppDocument } from './types/documents';
-import { Menu, Clock, Search } from 'lucide-react';
+import { Menu, Clock, Search, AlertTriangle, Download, Upload, CheckCircle2 } from 'lucide-react';
 import { GlobalSearchModal } from './components/GlobalSearchModal';
 import { ForgottenTimerReminderModal } from './components/ForgottenTimerReminderModal';
 import { DocumentDetailsModal } from './components/documents/DocumentDetailsModal';
@@ -31,14 +31,96 @@ const MainAppContent: React.FC = () => {
     settings,
     routeParams,
     updateRouteParams,
+    clients,
     projects,
+    entries,
+    appSyncConflict,
+    isEphemeralServerWarning,
+    forceAcceptServerAppData,
+    dismissAppSyncConflict,
     showToast,
   } = useApp();
+
+  const {
+    documents,
+    sequences,
+    businessSettings,
+    documentsSyncConflict,
+    restoreBackup,
+    forceAcceptServerDocuments,
+    dismissDocumentsSyncConflict,
+  } = useDocuments();
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<TimeEntry | null>(null);
   const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
   const [detailsDocFromSearch, setDetailsDocFromSearch] = useState<AppDocument | null>(null);
+  const [isRestoringLocal, setIsRestoringLocal] = useState(false);
+
+  const activeSyncConflict = appSyncConflict || documentsSyncConflict;
+
+  const handleDownloadLocalHold = () => {
+    try {
+      const payload = {
+        version: '1.0',
+        exportDate: new Date().toISOString(),
+        reason: 'client_sync_pause_snapshot',
+        clients,
+        projects,
+        entries,
+        documents,
+        sequences,
+        business: businessSettings,
+        settings,
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `amit-touch-local-recovery-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('קובץ גיבוי מקומי הורד בהצלחה');
+    } catch {
+      showToast('שגיאה ביצוא הגיבוי המקומי');
+    }
+  };
+
+  const handlePushLocalToServer = async () => {
+    setIsRestoringLocal(true);
+    try {
+      const payload = {
+        version: '1.0',
+        exportDate: new Date().toISOString(),
+        reason: 'client_sync_pause_restore',
+        clients,
+        projects,
+        entries,
+        documents,
+        sequences,
+        business: businessSettings,
+        settings,
+      };
+      const res = await restoreBackup(payload);
+      if (res?.success) {
+        dismissAppSyncConflict();
+        dismissDocumentsSyncConflict();
+        showToast('הנתונים המקומיים שוחזרו בהצלחה לשרת');
+      } else {
+        showToast(res?.error || 'שחזור הנתונים לשרת נכשל');
+      }
+    } finally {
+      setIsRestoringLocal(false);
+    }
+  };
+
+  const handleAcceptServerState = async () => {
+    if (appSyncConflict) await forceAcceptServerAppData();
+    if (documentsSyncConflict) await forceAcceptServerDocuments();
+    showToast('סונכרנו נתוני השרת');
+  };
 
   // Global search keyboard shortcuts (Ctrl+K, Cmd+K, /)
   React.useEffect(() => {
@@ -165,6 +247,66 @@ const MainAppContent: React.FC = () => {
 
       {/* Main Content Area: Offset by desktop sidebar width (172px) on right in RTL */}
       <main className="relative z-10 md:mr-[172px] min-h-screen p-4 sm:p-6 lg:p-8 xl:p-10 max-w-[1520px]">
+        {activeSyncConflict && (
+          <div
+            role="alert"
+            className="mb-6 rounded-2xl border border-rose-300 bg-rose-50/95 p-4 sm:p-5 text-rose-950 shadow-sm"
+          >
+            <div className="flex flex-col gap-3">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h2 className="font-bold text-base">
+                    הסנכרון הושהה אוטומטית כדי למנוע דריסת נתונים מקומיים
+                  </h2>
+                  <p className="text-sm text-rose-900">
+                    זוהה שנתוני השרת ריקים, חסרים או ישנים מהנתונים השמורים בדפדפן ({activeSyncConflict.message || `רשומות מקומיות: ${activeSyncConflict.localCount}, שרת: ${activeSyncConflict.serverCount}`}). המערכת שמרה עותק מקומי ולא מחקה את הרשומות שלך.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 pr-8">
+                <button
+                  type="button"
+                  onClick={handlePushLocalToServer}
+                  disabled={isRestoringLocal}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-rose-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-rose-800 disabled:opacity-60 transition-colors cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  {isRestoringLocal ? 'משחזר לשרת...' : 'שחזר נתונים מקומיים לשרת'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadLocalHold}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3.5 py-2 text-xs font-semibold text-rose-900 hover:bg-rose-100 transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  שמור גיבוי מקומי (JSON)
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAcceptServerState}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-transparent px-3 py-2 text-xs font-medium text-rose-800 hover:bg-rose-100/80 transition-colors cursor-pointer"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  קבל נתוני שרת בכל זאת
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isEphemeralServerWarning && !activeSyncConflict && (
+          <div
+            role="status"
+            className="mb-5 rounded-2xl border border-amber-300 bg-amber-50/90 px-4 py-3 text-amber-950 flex items-center gap-2.5 text-sm"
+          >
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>
+              התראה: השרת פועל כעת ללא מסד נתונים חיצוני קבוע (<code dir="ltr">DATABASE_URL</code>). נתונים חדשים עלולים להימחק בעת הפעלה מחדש של השרת עד לחיבור PostgreSQL חיצוני.
+            </span>
+          </div>
+        )}
+
         {/* Tracker View */}
         {currentView === 'tracker' && (
           <div className="flex flex-col gap-6 lg:gap-7">

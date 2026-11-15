@@ -1,9 +1,8 @@
 {
-  "isProductionActive": true,
-  "paymentRequestNext": 40022,
-  "receiptNext": 250020,
-  "quoteNext": 1001,
-  "testSequenceNext": 1003,
-  "isLocked": true,
-  "confirmedAt": "2026-10-29T15:11:37.141Z"
+  "isProductionActive": false,
+  "paymentRequestNext": 40016,
+  "receiptNext": 250021,
+  "quoteNext": null,
+  "testSequenceNext": 1001,
+  "isLocked": false
 }

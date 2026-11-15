@@ -116,6 +116,9 @@ import {
   recordLoginFailure,
   clearLoginFailures,
   authenticateRequest,
+  recoverOwnerAccount,
+  issueRecoveryTicket,
+  isOwnerRecoveryEnabled,
 } from './authService.ts';
 import crypto from 'crypto';
 
@@ -126,10 +129,19 @@ import {
   ensureSignedDocsStore,
   verifyPdfDigitalSignature
 } from './digitalSignatureService.ts';
+import {
+  ensurePersistentStoreReady,
+  flushPersistentWrites,
+  getPersistentStorageStatus,
+  persistFilePath,
+  persistBinaryByKey,
+  deletePersistedFilePath,
+  fetchPersistedBinaryFallback,
+  resolveDataDir,
+  type StoreMeta,
+} from './persistentStore.ts';
 
-const DATA_DIR = process.env.DATA_DIR
-  ? path.resolve(process.env.DATA_DIR)
-  : path.resolve(process.cwd(), 'data');
+const DATA_DIR = resolveDataDir();
 const DOCUMENTS_FILE = path.join(DATA_DIR, 'documents.json');
 const SEQUENCES_FILE = path.join(DATA_DIR, 'sequences.json');
 const BUSINESS_FILE = path.join(DATA_DIR, 'business.json');
@@ -146,7 +158,192 @@ const EXTERNAL_BACKUPS_DIR = process.env.BACKUP_EXTERNAL_DIR
 const BACKUP_STATUS_FILE = path.join(DATA_DIR, 'backup_status.json');
 const APP_SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const MAINTENANCE_LOCK_FILE = path.join(DATA_DIR, 'maintenance_lock.json');
+const STORE_META_FILE = path.join(DATA_DIR, '.store_meta.json');
+const DELETIONS_FILE = path.join(DATA_DIR, 'deletions.json');
 const SIGNED_DOCS_DIR = path.resolve(DATA_DIR, 'signed_documents');
+
+interface DeletionRecord {
+  id: string;
+  deletedAt: string;
+}
+
+interface DeletionsStore {
+  entries: Record<string, DeletionRecord>;
+  clients: Record<string, DeletionRecord>;
+  projects: Record<string, DeletionRecord>;
+  documents: Record<string, DeletionRecord>;
+}
+
+const EMPTY_DELETIONS: DeletionsStore = {
+  entries: {},
+  clients: {},
+  projects: {},
+  documents: {},
+};
+
+function readDeletions(): DeletionsStore {
+  const raw = readJsonSafe<Partial<DeletionsStore>>(DELETIONS_FILE, EMPTY_DELETIONS);
+  return {
+    entries: raw?.entries && typeof raw.entries === 'object' ? raw.entries : {},
+    clients: raw?.clients && typeof raw.clients === 'object' ? raw.clients : {},
+    projects: raw?.projects && typeof raw.projects === 'object' ? raw.projects : {},
+    documents: raw?.documents && typeof raw.documents === 'object' ? raw.documents : {},
+  };
+}
+
+function recordDeletions(
+  updates: Partial<Record<keyof DeletionsStore, string[]>>,
+  deletedAt = new Date().toISOString()
+): DeletionsStore {
+  const deletions = readDeletions();
+  for (const kind of ['entries', 'clients', 'projects', 'documents'] as const) {
+    const ids = updates[kind];
+    if (!ids?.length) continue;
+    for (const id of ids) {
+      if (id) {
+        deletions[kind][id] = { id, deletedAt };
+      }
+    }
+  }
+  writeJson(DELETIONS_FILE, deletions);
+  return deletions;
+}
+
+function clearDeletion(kind: keyof DeletionsStore, id: string): void {
+  if (!id) return;
+  const deletions = readDeletions();
+  if (deletions[kind][id]) {
+    delete deletions[kind][id];
+    writeJson(DELETIONS_FILE, deletions);
+  }
+}
+
+function isSupersededByDeletion(
+  deletion: DeletionRecord | undefined,
+  item: { updatedAt?: string; createdAt?: string } | null | undefined
+): boolean {
+  if (!deletion) return false;
+  const itemTs = item?.updatedAt || item?.createdAt || '';
+  if (!itemTs) return true;
+  return deletion.deletedAt >= itemTs;
+}
+
+function archiveSignedPdf(filename: string, buf: Buffer): void {
+  ensureSignedDocsStore();
+  const safeName = path.basename(filename);
+  const targetPath = path.join(SIGNED_DOCS_DIR, safeName);
+  fs.writeFileSync(targetPath, buf);
+  persistBinaryByKey(`signed_documents/${safeName}`, buf);
+}
+
+async function readArchivedSignedPdf(filename: string): Promise<Buffer | null> {
+  const safeName = path.basename(filename);
+  const targetPath = path.join(SIGNED_DOCS_DIR, safeName);
+  if (fs.existsSync(targetPath)) {
+    return fs.readFileSync(targetPath);
+  }
+  const fallbackBuf = await fetchPersistedBinaryFallback(`signed_documents/${safeName}`);
+  if (fallbackBuf) {
+    ensureSignedDocsStore();
+    fs.writeFileSync(targetPath, fallbackBuf);
+    return fallbackBuf;
+  }
+  return null;
+}
+
+function readJsonSafe<T>(filePath: string, fallback: T): T {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8')) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function computeDatasetHasRecords(): boolean {
+  const docs = readJsonSafe<any[]>(DOCUMENTS_FILE, []);
+  const entries = readJsonSafe<any[]>(ENTRIES_FILE, []);
+  const clients = readJsonSafe<any[]>(CLIENTS_FILE, []);
+  const projects = readJsonSafe<any[]>(PROJECTS_FILE, []);
+  return docs.length > 0 || entries.length > 0 || clients.length > 0 || projects.length > 0;
+}
+
+function writeStoreMeta(meta: StoreMeta): void {
+  const content = JSON.stringify(meta, null, 2);
+  fs.writeFileSync(STORE_META_FILE, content, 'utf8');
+  persistFilePath(STORE_META_FILE, content);
+}
+
+function ensureStoreMeta(markActiveIfHasData = true, bumpRevision = false): StoreMeta {
+  const existing = readJsonSafe<StoreMeta | null>(STORE_META_FILE, null);
+  const hasRecords = markActiveIfHasData ? computeDatasetHasRecords() : false;
+  if (existing) {
+    const nextRevision = bumpRevision ? (existing.revision || 1) + 1 : (existing.revision || 1);
+    if ((hasRecords && existing.datasetState !== 'active') || bumpRevision) {
+      const updated: StoreMeta = {
+        ...existing,
+        datasetState: hasRecords || bumpRevision ? 'active' : existing.datasetState,
+        lastMutationAt: new Date().toISOString(),
+        revision: nextRevision,
+      };
+      writeStoreMeta(updated);
+      return updated;
+    }
+    return existing;
+  }
+  const created: StoreMeta = {
+    schemaVersion: 1,
+    instanceId: crypto.randomUUID(),
+    initializedAt: new Date().toISOString(),
+    lastMutationAt: hasRecords || bumpRevision ? new Date().toISOString() : null,
+    datasetState: hasRecords || bumpRevision ? 'active' : 'empty_uninitialized',
+    revision: bumpRevision ? 2 : 1,
+  };
+  writeStoreMeta(created);
+  return created;
+}
+
+function buildSyncMeta() {
+  const docs = readJsonSafe<AppDocument[]>(DOCUMENTS_FILE, []);
+  const entries = readJsonSafe<any[]>(ENTRIES_FILE, []);
+  const clients = readJsonSafe<any[]>(CLIENTS_FILE, []);
+  const projects = readJsonSafe<any[]>(PROJECTS_FILE, []);
+  const sequences = readJsonSafe<SequenceSettings | null>(SEQUENCES_FILE, null);
+  const meta = ensureStoreMeta(true);
+  const storageStatus = getPersistentStorageStatus();
+
+  const officialDocs = docs.filter(d => d.isOfficial && d.documentNumber);
+  const maxEntryDate = entries.reduce<string | null>((max, e) => {
+    const d = typeof e?.date === 'string' ? e.date : '';
+    return d && (!max || d > max) ? d : max;
+  }, null);
+  const maxReceiptNumber = officialDocs
+    .filter(d => d.type === 'receipt' && /^\d+$/.test(String(d.documentNumber)))
+    .reduce((m, d) => Math.max(m, parseInt(String(d.documentNumber), 10)), 0);
+  const maxPaymentRequestNumber = officialDocs
+    .filter(d => d.type === 'payment_request' && /^\d+$/.test(String(d.documentNumber)))
+    .reduce((m, d) => Math.max(m, parseInt(String(d.documentNumber), 10)), 0);
+
+  return {
+    datasetState: meta.datasetState,
+    revision: meta.revision || 1,
+    storageBackend: storageStatus.backend,
+    isDurable: storageStatus.isDurable,
+    isEphemeralWarning: storageStatus.isEphemeralWarning,
+    counts: {
+      clients: clients.length,
+      projects: projects.length,
+      entries: entries.length,
+      documents: docs.length,
+      officialDocuments: officialDocs.length,
+    },
+    maxEntryDate,
+    maxReceiptNumber,
+    maxPaymentRequestNumber,
+    receiptNext: sequences?.receiptNext || 0,
+    paymentRequestNext: sequences?.paymentRequestNext || 0,
+  };
+}
 
 // Helper to bundle essential graphic assets (signature & studio logo) into backups
 function loadBackupAssets(): { signatureBase64?: string; logoBase64?: string } {
@@ -270,15 +467,19 @@ function performAutoBackup(reason: string = 'auto_snapshot'): void {
     pruneBackupDirectory(BACKUPS_DIR, 'snapshot_', 15, 14);
     pruneBackupDirectory(EXTERNAL_BACKUPS_DIR, 'snapshot_', 30, 30);
 
+    const storageStatus = getPersistentStorageStatus();
     const statusData = {
       lastBackupAt: new Date().toISOString(),
       status: 'success',
       totalLocalSnapshots: fs.readdirSync(BACKUPS_DIR).filter(f => f.startsWith('snapshot_')).length,
       externalBackupLocation: EXTERNAL_BACKUPS_DIR,
       lastReason: reason,
-      storageArchitecture: 'dual_domain_persistent_filesystem',
+      storageArchitecture: storageStatus.isDurable
+        ? 'external_postgresql_persistent'
+        : 'dual_domain_persistent_filesystem',
       retention: '30_days',
-      isGuaranteedWhileClosed: false,
+      isGuaranteedWhileClosed: storageStatus.isDurable,
+      storageStatus,
     };
     writeJson(BACKUP_STATUS_FILE, statusData);
   } catch (err) {
@@ -379,6 +580,7 @@ function ensureDataStore(): void {
     };
 
     const SEED_DIR = path.resolve(process.cwd(), 'server', 'seed');
+    const allowSeedAutoload = process.env.ALLOW_SEED_AUTOLOAD === 'true';
     function loadSeedOrDefault<T>(fileName: string, fallback: T): T {
       const seedPath = path.join(SEED_DIR, fileName);
       if (fs.existsSync(seedPath)) {
@@ -391,51 +593,34 @@ function ensureDataStore(): void {
       return fallback;
     }
 
-    if (!fs.existsSync(DOCUMENTS_FILE) || (fs.existsSync(DOCUMENTS_FILE) && JSON.parse(fs.readFileSync(DOCUMENTS_FILE, 'utf8') || '[]').length === 0)) {
-      const initialDocs = loadSeedOrDefault('documents.json', []);
-      if (initialDocs.length > 0) {
-        fs.writeFileSync(DOCUMENTS_FILE, JSON.stringify(initialDocs, null, 2), 'utf-8');
-      } else if (!fs.existsSync(DOCUMENTS_FILE)) {
-        fs.writeFileSync(DOCUMENTS_FILE, JSON.stringify([], null, 2), 'utf-8');
-      }
+    // Never silently reseed business records over missing or empty arrays unless explicitly requested
+    function ensureCollectionFile(filePath: string, seedFileName: string): void {
+      if (fs.existsSync(filePath)) return;
+      const initialData = allowSeedAutoload ? loadSeedOrDefault<any[]>(seedFileName, []) : [];
+      writeJson(filePath, initialData);
     }
+
+    ensureCollectionFile(DOCUMENTS_FILE, 'documents.json');
+    ensureCollectionFile(CLIENTS_FILE, 'clients.json');
+    ensureCollectionFile(PROJECTS_FILE, 'projects.json');
+    ensureCollectionFile(ENTRIES_FILE, 'entries.json');
+
     if (!fs.existsSync(SEQUENCES_FILE)) {
       const initialSequences = loadSeedOrDefault('sequences.json', defaultSequences);
-      fs.writeFileSync(SEQUENCES_FILE, JSON.stringify(initialSequences, null, 2), 'utf-8');
+      writeJson(SEQUENCES_FILE, initialSequences);
     }
     if (!fs.existsSync(BUSINESS_FILE)) {
       const initialBusiness = loadSeedOrDefault('business.json', defaultBusiness);
-      fs.writeFileSync(BUSINESS_FILE, JSON.stringify(initialBusiness, null, 2), 'utf-8');
+      writeJson(BUSINESS_FILE, initialBusiness);
     }
     if (!fs.existsSync(AUDIT_FILE)) {
-      fs.writeFileSync(AUDIT_FILE, JSON.stringify([], null, 2), 'utf-8');
+      writeJson(AUDIT_FILE, []);
     }
     if (!fs.existsSync(IDEMPOTENCY_FILE)) {
-      fs.writeFileSync(IDEMPOTENCY_FILE, JSON.stringify({}, null, 2), 'utf-8');
+      writeJson(IDEMPOTENCY_FILE, {});
     }
-    if (!fs.existsSync(CLIENTS_FILE) || (fs.existsSync(CLIENTS_FILE) && JSON.parse(fs.readFileSync(CLIENTS_FILE, 'utf8') || '[]').length === 0)) {
-      const initialClients = loadSeedOrDefault('clients.json', []);
-      if (initialClients.length > 0) {
-        fs.writeFileSync(CLIENTS_FILE, JSON.stringify(initialClients, null, 2), 'utf-8');
-      } else if (!fs.existsSync(CLIENTS_FILE)) {
-        fs.writeFileSync(CLIENTS_FILE, JSON.stringify([], null, 2), 'utf-8');
-      }
-    }
-    if (!fs.existsSync(PROJECTS_FILE) || (fs.existsSync(PROJECTS_FILE) && JSON.parse(fs.readFileSync(PROJECTS_FILE, 'utf8') || '[]').length === 0)) {
-      const initialProjects = loadSeedOrDefault('projects.json', []);
-      if (initialProjects.length > 0) {
-        fs.writeFileSync(PROJECTS_FILE, JSON.stringify(initialProjects, null, 2), 'utf-8');
-      } else if (!fs.existsSync(PROJECTS_FILE)) {
-        fs.writeFileSync(PROJECTS_FILE, JSON.stringify([], null, 2), 'utf-8');
-      }
-    }
-    if (!fs.existsSync(ENTRIES_FILE) || (fs.existsSync(ENTRIES_FILE) && JSON.parse(fs.readFileSync(ENTRIES_FILE, 'utf8') || '[]').length === 0)) {
-      const initialEntries = loadSeedOrDefault('entries.json', []);
-      if (initialEntries.length > 0) {
-        fs.writeFileSync(ENTRIES_FILE, JSON.stringify(initialEntries, null, 2), 'utf-8');
-      } else if (!fs.existsSync(ENTRIES_FILE)) {
-        fs.writeFileSync(ENTRIES_FILE, JSON.stringify([], null, 2), 'utf-8');
-      }
+    if (!fs.existsSync(DELETIONS_FILE)) {
+      writeJson(DELETIONS_FILE, EMPTY_DELETIONS);
     }
 
     // Ensure digital signature certificates exist in ./certs
@@ -458,7 +643,7 @@ function ensureDataStore(): void {
       fs.mkdirSync(BACKUPS_DIR, { recursive: true });
     }
     if (!fs.existsSync(APP_SETTINGS_FILE)) {
-      fs.writeFileSync(APP_SETTINGS_FILE, JSON.stringify({
+      writeJson(APP_SETTINGS_FILE, {
         studioName: 'AMIT TOUCH',
         defaultHourlyRate: 350,
         currency: '₪',
@@ -467,21 +652,26 @@ function ensureDataStore(): void {
           thresholdHours: 4,
           browserNotificationsEnabled: false
         }
-      }, null, 2), 'utf-8');
+      });
     }
     if (!fs.existsSync(BACKUP_STATUS_FILE)) {
+      const storageStatus = getPersistentStorageStatus();
       const initialStatus = {
         lastBackupAt: new Date().toISOString(),
         status: 'success',
         totalLocalSnapshots: 0,
         lastReason: 'initial_store_setup',
-        storageArchitecture: 'dual_domain_persistent_filesystem',
+        storageArchitecture: storageStatus.isDurable
+          ? 'external_postgresql_persistent'
+          : 'dual_domain_persistent_filesystem',
         retention: '30_days',
-        isGuaranteedWhileClosed: false,
+        isGuaranteedWhileClosed: storageStatus.isDurable,
       };
-      fs.writeFileSync(BACKUP_STATUS_FILE, JSON.stringify(initialStatus, null, 2), 'utf-8');
+      writeJson(BACKUP_STATUS_FILE, initialStatus);
       performAutoBackup('initial_store_setup');
     }
+
+    ensureStoreMeta(true);
 
     // Normalize legacy delivery statuses and label historical Ethereal test attempts
     try {
@@ -505,6 +695,11 @@ function ensureDataStore(): void {
               }
             }
           }
+        }
+
+        // Preserve verified recovered delivery status (where SMTP messageId/sendAttempts were unavailable from PDF)
+        if ((d as any).isRecovered && d.deliveryStatus === 'sent') {
+          continue;
         }
 
         // If document was marked as sent solely via Ethereal or unverified legacy, exclude from actual delivery
@@ -535,7 +730,7 @@ function ensureDataStore(): void {
         }
       }
       if (modified) {
-        fs.writeFileSync(DOCUMENTS_FILE, JSON.stringify(docs, null, 2), 'utf-8');
+        writeJson(DOCUMENTS_FILE, docs);
       }
     }
   } catch (err) {
@@ -641,6 +836,20 @@ function writeJson(filePath: string, data: any): void {
       try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch {}
       throw err;
     }
+  }
+
+  // 3. Replicate durably to external persistent backend when configured
+  persistFilePath(filePath, content);
+  const resolvedTarget = path.resolve(filePath);
+  if (
+    (resolvedTarget === DOCUMENTS_FILE ||
+      resolvedTarget === ENTRIES_FILE ||
+      resolvedTarget === CLIENTS_FILE ||
+      resolvedTarget === PROJECTS_FILE) &&
+    Array.isArray(data) &&
+    data.length > 0
+  ) {
+    ensureStoreMeta(true);
   }
 }
 
@@ -779,11 +988,29 @@ export function validateSecuredReceiptPaymentEligibility(
 }
 
 export function documentServerMiddleware(): Connect.NextHandleFunction {
-  ensureDataStore();
+  let storeInitPromise: Promise<void> | null = null;
+  const ensureServerStoreReady = async () => {
+    if (!storeInitPromise) {
+      storeInitPromise = (async () => {
+        await ensurePersistentStoreReady();
+        ensureDataStore();
+      })().catch((err) => {
+        storeInitPromise = null;
+        throw err;
+      });
+    }
+    return storeInitPromise;
+  };
+  // Trigger initial warmup asynchronously when local filesystem is already ready
+  if (!process.env.DATABASE_URL) {
+    ensureDataStore();
+  }
 
   return async (req, res, next) => {
     const url = req.url || '';
     if (
+      url !== '/api/health' &&
+      !url.startsWith('/api/health?') &&
       !url.startsWith('/api/auth') &&
       !url.startsWith('/api/documents') &&
       !url.startsWith('/api/app-data') &&
@@ -811,6 +1038,23 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
     };
 
     try {
+      await ensureServerStoreReady();
+
+      // Public Health & Storage Diagnostics Endpoint (no PII or business records)
+      if (req.method === 'GET' && (url === '/api/health' || url.startsWith('/api/health?'))) {
+        const storageStatus = getPersistentStorageStatus();
+        const syncMeta = buildSyncMeta();
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          ok: true,
+          storageStatus,
+          datasetState: syncMeta.datasetState,
+          isDurable: storageStatus.isDurable,
+          storageBackend: storageStatus.backend,
+        }));
+        return;
+      }
+
       // ==========================================
       // Public Authentication Endpoints
       // ==========================================
@@ -830,6 +1074,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           user: auth.authenticated ? { email: auth.email } : undefined,
           isConfigured: !!owner,
           requiresSetupToken: !owner,
+          recoveryAvailable: isOwnerRecoveryEnabled(),
         }));
         return;
       }
@@ -878,6 +1123,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         };
         saveOwnerAccount(newOwner);
         consumeSetupToken();
+        await flushPersistentWrites();
 
         const isHttps = req.headers['x-forwarded-proto'] === 'https' || (req.socket as any).encrypted;
         const token = createSession(email, req.socket.remoteAddress, req.headers['user-agent']);
@@ -885,6 +1131,66 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
         res.statusCode = 200;
         res.end(JSON.stringify({ success: true, user: { email } }));
+        return;
+      }
+
+      // Auth 2a: POST /api/auth/recover/authorize - Validate recovery key & issue single-use short-lived ticket
+      if (req.method === 'POST' && url === '/api/auth/recover/authorize') {
+        const body = await readBody();
+        const email = (body.email || '').trim().toLowerCase();
+        const recoveryKey = (body.recoveryKey || body.setupToken || '').trim();
+
+        const ticketRes = issueRecoveryTicket(req, recoveryKey, email);
+        if (!ticketRes.success || !ticketRes.ticket) {
+          res.statusCode = ticketRes.error?.includes('נחסמה') ? 429 : 400;
+          res.end(JSON.stringify({ error: ticketRes.error || 'אימות מפתח שחזור נכשל' }));
+          return;
+        }
+
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true, ticket: ticketRes.ticket }));
+        return;
+      }
+
+      // Auth 2b: POST /api/auth/recover-owner (or /api/auth/recover/complete / /api/auth/reset-password) - Complete single-use recovery & reset
+      if (
+        req.method === 'POST' &&
+        (url === '/api/auth/recover/complete' ||
+          url === '/api/auth/recover-owner' ||
+          url === '/api/auth/reset-password')
+      ) {
+        const body = await readBody();
+        const email = (body.email || '').trim().toLowerCase();
+        const recoveryKey = (body.recoveryKey || body.setupToken || '').trim();
+        const ticket = (body.ticket || body.recoveryTicket || '').trim();
+        const newPassword = (body.newPassword || body.password || '').trim();
+
+        const result = recoverOwnerAccount({
+          req,
+          email: email || undefined,
+          recoveryKey: recoveryKey || undefined,
+          ticket: ticket || undefined,
+          newPassword,
+        });
+
+        if (!result.success || !result.owner) {
+          res.statusCode = result.error?.includes('נחסמה') ? 429 : 400;
+          res.end(JSON.stringify({ error: result.error || 'שחזור החשבון נכשל' }));
+          return;
+        }
+
+        await flushPersistentWrites();
+
+        const isHttps = req.headers['x-forwarded-proto'] === 'https' || (req.socket as any).encrypted;
+        const token = createSession(result.owner.email, req.socket.remoteAddress, req.headers['user-agent']);
+        setSessionCookie(res, token, isHttps);
+
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          success: true,
+          message: 'סיסמת הבעלים עודכנה בהצלחה',
+          user: { email: result.owner.email },
+        }));
         return;
       }
 
@@ -932,6 +1238,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         const isHttps = req.headers['x-forwarded-proto'] === 'https' || (req.socket as any).encrypted;
         const token = createSession(owner.email, req.socket.remoteAddress, req.headers['user-agent']);
         setSessionCookie(res, token, isHttps);
+        await flushPersistentWrites();
 
         res.statusCode = 200;
         res.end(JSON.stringify({ success: true, user: { email: owner.email } }));
@@ -943,6 +1250,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         const token = parseSessionCookie(req);
         if (token) destroySession(token);
         clearSessionCookie(res);
+        await flushPersistentWrites();
         res.statusCode = 200;
         res.end(JSON.stringify({ success: true }));
         return;
@@ -1015,6 +1323,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
             provider: 'gmail',
             fromEmail: tokens.email,
           });
+          await flushPersistentWrites();
 
           res.statusCode = 200;
           res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -1078,6 +1387,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           ...currentEmailConfig,
           provider: 'none',
         });
+        await flushPersistentWrites();
         res.statusCode = 200;
         res.end(JSON.stringify({ success: true }));
         return;
@@ -1113,9 +1423,12 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         const sequences = readJson<SequenceSettings>(SEQUENCES_FILE);
         const business = readJson<BusinessSettings>(BUSINESS_FILE);
         const audit = readJson<AuditLogEntry[]>(AUDIT_FILE);
+        const deletions = readDeletions();
+        const syncMeta = buildSyncMeta();
+        const storageStatus = getPersistentStorageStatus();
 
         res.statusCode = 200;
-        res.end(JSON.stringify({ documents, sequences, business, audit }));
+        res.end(JSON.stringify({ documents, sequences, business, audit, deletions, syncMeta, storageStatus }));
         return;
       }
 
@@ -1167,8 +1480,11 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
             });
           }
 
+          clearDeletion('documents', savedDoc.id);
           writeJson(DOCUMENTS_FILE, documents);
           writeJson(AUDIT_FILE, audit);
+          ensureStoreMeta(true, true);
+          await flushPersistentWrites();
 
           res.statusCode = 200;
           res.end(JSON.stringify(savedDoc));
@@ -1427,7 +1743,6 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           ensureSignedDocsStore();
           const safeTypeStr = issuedDoc.type === 'payment_request' ? 'payment_request' : issuedDoc.type === 'receipt' ? 'receipt' : 'quote';
           const signedFilename = `${safeTypeStr}_${issuedDoc.documentNumber}_${issuedDoc.id}.pdf`;
-          const targetFilePath = path.join(SIGNED_DOCS_DIR, signedFilename);
 
           const { generateDocumentPdfBuffer } = await getPdfGenerator();
           const initialPdfBuffer = generateDocumentPdfBuffer(issuedDoc, business);
@@ -1435,7 +1750,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
           if (isPaperReceipt) {
             // Paper receipt workflow (printed/physical delivery - non-computerized document)
-            fs.writeFileSync(targetFilePath, initialPdfBuffer);
+            archiveSignedPdf(signedFilename, initialPdfBuffer);
             const sha256 = crypto.createHash('sha256').update(initialPdfBuffer).digest('hex');
             issuedDoc.signedPdfFilename = signedFilename;
             issuedDoc.isPaperReceipt = true;
@@ -1475,7 +1790,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
               }
 
               const sha256 = crypto.createHash('sha256').update(signedPdf).digest('hex');
-              fs.writeFileSync(targetFilePath, signedPdf);
+              archiveSignedPdf(signedFilename, signedPdf);
 
               issuedDoc.signedPdfFilename = signedFilename;
               issuedDoc.digitalSignature = {
@@ -1518,7 +1833,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
               }
 
               // Non-receipt fallback
-              fs.writeFileSync(targetFilePath, initialPdfBuffer);
+              archiveSignedPdf(signedFilename, initialPdfBuffer);
               const sha256 = crypto.createHash('sha256').update(initialPdfBuffer).digest('hex');
               issuedDoc.signedPdfFilename = signedFilename;
               issuedDoc.digitalSignature = {
@@ -1533,7 +1848,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
             }
           } else {
             // Signing credentials not configured on server - for payment requests and quotes only
-            fs.writeFileSync(targetFilePath, initialPdfBuffer);
+            archiveSignedPdf(signedFilename, initialPdfBuffer);
             const sha256 = crypto.createHash('sha256').update(initialPdfBuffer).digest('hex');
             issuedDoc.signedPdfFilename = signedFilename;
             issuedDoc.digitalSignature = {
@@ -1592,9 +1907,12 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
             writeJson(IDEMPOTENCY_FILE, idempotencyMap);
           }
 
+          clearDeletion('documents', issuedDoc.id);
           writeJson(DOCUMENTS_FILE, documents);
           writeJson(SEQUENCES_FILE, sequences);
           writeJson(AUDIT_FILE, audit);
+          ensureStoreMeta(true, true);
+          await flushPersistentWrites();
 
           const updatedPRs = (issuedDoc.type === 'receipt' && issuedDoc.paymentAllocations)
             ? documents.filter(d => issuedDoc.paymentAllocations?.some(a => a.paymentRequestId === d.id))
@@ -1655,6 +1973,8 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
           writeJson(DOCUMENTS_FILE, documents);
           writeJson(AUDIT_FILE, audit);
+          ensureStoreMeta(true, true);
+          await flushPersistentWrites();
 
           res.statusCode = 200;
           res.end(JSON.stringify(documents[docIdx]));
@@ -1690,9 +2010,9 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           const documents = readJson<AppDocument[]>(DOCUMENTS_FILE);
           const doc = documents.find(d => d.id === body.documentId);
           if (doc?.signedPdfFilename) {
-            const fp = path.join(SIGNED_DOCS_DIR, doc.signedPdfFilename);
-            if (fs.existsSync(fp)) {
-              bufferToVerify = fs.readFileSync(fp);
+            const fpBuf = await readArchivedSignedPdf(doc.signedPdfFilename);
+            if (fpBuf) {
+              bufferToVerify = fpBuf;
               targetFilename = doc.signedPdfFilename;
             }
           }
@@ -1717,6 +2037,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
       if (req.method === 'POST' && url === '/api/documents/email-config') {
         const config = await readBody();
         saveEmailConfig(config);
+        await flushPersistentWrites();
         const status = checkEmailProviderStatus();
         res.statusCode = 200;
         res.end(JSON.stringify(status));
@@ -1820,9 +2141,9 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           // Serve exact immutable signed PDF if available in store, else generate PDF buffer
           let pdfBuffer: Buffer;
           if (doc.signedPdfFilename) {
-            const signedPath = path.join(SIGNED_DOCS_DIR, doc.signedPdfFilename);
-            if (fs.existsSync(signedPath)) {
-              pdfBuffer = fs.readFileSync(signedPath);
+            const archivedBuf = await readArchivedSignedPdf(doc.signedPdfFilename);
+            if (archivedBuf) {
+              pdfBuffer = archivedBuf;
             } else {
               const { generateDocumentPdfBuffer } = await getPdfGenerator();
               pdfBuffer = generateDocumentPdfBuffer(doc, business);
@@ -1887,6 +2208,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
             writeJson(DOCUMENTS_FILE, documents);
             writeJson(AUDIT_FILE, audit);
             performAutoBackup('send_email');
+            await flushPersistentWrites();
 
             res.statusCode = 200;
             res.end(JSON.stringify({ document: doc, result: sendResult }));
@@ -1919,6 +2241,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
             writeJson(DOCUMENTS_FILE, documents);
             writeJson(AUDIT_FILE, audit);
+            await flushPersistentWrites();
 
             res.statusCode = 400;
             res.end(JSON.stringify({ error: sendErr.message || 'שגיאה בשליחת הדוא״ל' }));
@@ -2117,6 +2440,8 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
           writeJson(DOCUMENTS_FILE, documents);
           writeJson(AUDIT_FILE, audit);
+          ensureStoreMeta(true, true);
+          await flushPersistentWrites();
 
           res.statusCode = 200;
           res.end(JSON.stringify(doc));
@@ -2165,6 +2490,8 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
           writeJson(DOCUMENTS_FILE, documents);
           writeJson(AUDIT_FILE, audit);
+          ensureStoreMeta(true, true);
+          await flushPersistentWrites();
 
           res.statusCode = 200;
           res.end(JSON.stringify(doc));
@@ -2180,6 +2507,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         await acquireLock();
         try {
           writeJson(BUSINESS_FILE, updatedBusiness);
+          await flushPersistentWrites();
           res.setHeader('Content-Type', 'application/json');
           res.statusCode = 200;
           res.end(JSON.stringify(updatedBusiness));
@@ -2210,6 +2538,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
             } : {}),
           };
           writeJson(SEQUENCES_FILE, merged);
+          await flushPersistentWrites();
           res.statusCode = 200;
           res.end(JSON.stringify(merged));
         } finally {
@@ -2220,19 +2549,37 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
       // 8a. GET /api/backup/status - Last backup status & storage architecture info
       if (req.method === 'GET' && (url === '/api/backup/status' || url.startsWith('/api/backup/status?'))) {
-        let statusData = {
+        const storageStatus = getPersistentStorageStatus();
+        const syncMeta = buildSyncMeta();
+        let statusData: any = {
           lastBackupAt: new Date().toISOString(),
           status: 'success',
           totalSnapshots: 0,
-          storageArchitecture: 'local_persistent_server_filesystem',
-          isGuaranteedWhileClosed: false,
-          description: 'גיבויים אוטומטיים מבוצעים ומאוחסנים במערכת הקבצים של השרת. גיבוי מתוזמן אינו מובטח כאשר היישום סגור.'
+          storageArchitecture: storageStatus.isDurable
+            ? 'external_postgresql_persistent'
+            : 'local_persistent_server_filesystem',
+          isGuaranteedWhileClosed: storageStatus.isDurable,
+          description: storageStatus.isDurable
+            ? 'כל המסמכים, רשומות הזמן, רצפי המספור והקבלות החתומות נשמרים במסד נתונים חיצוני (PostgreSQL) ושורדים הפעלה מחדש ופריסה.'
+            : 'גיבויים אוטומטיים מבוצעים ומאוחסנים במערכת הקבצים של השרת. גיבוי מתוזמן אינו מובטח כאשר היישום סגור.'
         };
         if (fs.existsSync(BACKUP_STATUS_FILE)) {
           try {
-            statusData = JSON.parse(fs.readFileSync(BACKUP_STATUS_FILE, 'utf8'));
+            statusData = {
+              ...statusData,
+              ...JSON.parse(fs.readFileSync(BACKUP_STATUS_FILE, 'utf8')),
+              storageArchitecture: storageStatus.isDurable
+                ? 'external_postgresql_persistent'
+                : 'local_persistent_server_filesystem',
+              isGuaranteedWhileClosed: storageStatus.isDurable,
+              description: storageStatus.isDurable
+                ? 'כל המסמכים, רשומות הזמן, רצפי המספור והקבלות החתומות נשמרים במסד נתונים חיצוני (PostgreSQL) ושורדים הפעלה מחדש ופריסה.'
+                : 'גיבויים אוטומטיים מבוצעים ומאוחסנים במערכת הקבצים של השרת. גיבוי מתוזמן אינו מובטח כאשר היישום סגור.',
+            };
           } catch {}
         }
+        statusData.storageStatus = storageStatus;
+        statusData.syncMeta = syncMeta;
         res.statusCode = 200;
         res.end(JSON.stringify(statusData));
         return;
@@ -2375,11 +2722,21 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           const currentDocs = readJson<AppDocument[]>(DOCUMENTS_FILE);
           const currentSequences = readJson<SequenceSettings>(SEQUENCES_FILE);
           const currentAudit = readJson<AuditLogEntry[]>(AUDIT_FILE);
+          const currentDeletions = readDeletions();
+          const honorDeletions = !data.forceResurrectDeleted;
 
-          const backupDocs: AppDocument[] = Array.isArray(data.documents) ? data.documents : [];
-          const backupClients = Array.isArray(data.clients) ? data.clients : [];
-          const backupProjects = Array.isArray(data.projects) ? data.projects : [];
-          const backupEntries = Array.isArray(data.entries) ? data.entries : [];
+          const backupDocs: AppDocument[] = (Array.isArray(data.documents) ? data.documents : []).filter(
+            (d: AppDocument) => !honorDeletions || d.status !== 'draft' || !isSupersededByDeletion(currentDeletions.documents[d.id], d as any)
+          );
+          const backupClients = (Array.isArray(data.clients) ? data.clients : []).filter(
+            (c: any) => !honorDeletions || !isSupersededByDeletion(currentDeletions.clients[c.id], c)
+          );
+          const backupProjects = (Array.isArray(data.projects) ? data.projects : []).filter(
+            (p: any) => !honorDeletions || !isSupersededByDeletion(currentDeletions.projects[p.id], p)
+          );
+          const backupEntries = (Array.isArray(data.entries) ? data.entries : []).filter(
+            (e: any) => !honorDeletions || !isSupersededByDeletion(currentDeletions.entries[e.id], e)
+          );
           const backupAudit: AuditLogEntry[] = Array.isArray(data.audit) ? data.audit : [];
           const backupSequences: Partial<SequenceSettings> = data.sequences || {};
           const backupBusiness: Partial<BusinessSettings> = data.business || {};
@@ -2465,16 +2822,16 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           }
 
           // Restore signed PDFs archive if included in backup
+          let restoredSignedPdfsCount = 0;
           if (data.signedPdfs && typeof data.signedPdfs === 'object') {
             ensureSignedDocsStore();
             for (const [pdfName, b64] of Object.entries(data.signedPdfs)) {
               if (typeof pdfName === 'string' && typeof b64 === 'string' && pdfName.endsWith('.pdf')) {
                 try {
                   const safeName = path.basename(pdfName);
-                  const dest = path.join(SIGNED_DOCS_DIR, safeName);
-                  if (!fs.existsSync(dest)) {
-                    fs.writeFileSync(dest, Buffer.from(b64, 'base64'));
-                  }
+                  const rawB64 = b64.replace(/^data:application\/pdf;base64,/, '');
+                  archiveSignedPdf(safeName, Buffer.from(rawB64, 'base64'));
+                  restoredSignedPdfsCount++;
                 } catch (pdfRestErr) {
                   console.warn('Failed restoring signed PDF from backup:', pdfName, pdfRestErr);
                 }
@@ -2491,14 +2848,16 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
               documentId: 'system',
               action: 'backup_restored' as const,
               timestamp: new Date().toISOString(),
-              details: `בוצע שחזור נתונים מלא מגיבוב. נוצר קובץ הצלה מקדים: ${recoveryFile}. מספרי רצף שומרו בבטחה.`,
+              details: `בוצע שחזור נתונים מלא מגיבוי מוגן. נוצר קובץ הצלה מקדים: ${recoveryFile}. מספרי רצף שומרו בבטחה.`,
               performedBy: 'AMIT TOUCH Studio',
             }
           ];
           writeJson(AUDIT_FILE, combinedAudit);
+          ensureStoreMeta(true);
 
           // 6. Update backup status & snapshot
           performAutoBackup('post_restore');
+          await flushPersistentWrites();
 
           res.statusCode = 200;
           res.end(JSON.stringify({
@@ -2509,6 +2868,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
               projects: backupProjects.length,
               entries: backupEntries.length,
               documents: finalDocs.length,
+              signedPdfs: restoredSignedPdfsCount,
             },
             safeSequences,
           }));
@@ -2567,11 +2927,14 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
             performedBy: 'AMIT TOUCH Studio',
           });
 
+          const deletions = recordDeletions({ documents: [documentId] });
           writeJson(DOCUMENTS_FILE, documents);
           writeJson(AUDIT_FILE, audit);
+          ensureStoreMeta(true, true);
+          await flushPersistentWrites();
 
           res.statusCode = 200;
-          res.end(JSON.stringify({ success: true, deletedId: documentId }));
+          res.end(JSON.stringify({ success: true, deletedId: documentId, deletions }));
         } finally {
           releaseLock();
         }
@@ -2602,9 +2965,9 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         try {
           let pdfBuffer: Buffer;
           if (docToRender.signedPdfFilename) {
-            const signedPath = path.join(SIGNED_DOCS_DIR, docToRender.signedPdfFilename);
-            if (fs.existsSync(signedPath)) {
-              pdfBuffer = fs.readFileSync(signedPath);
+            const archivedBuf = await readArchivedSignedPdf(docToRender.signedPdfFilename);
+            if (archivedBuf) {
+              pdfBuffer = archivedBuf;
             } else {
               const { generateDocumentPdfBuffer } = await getPdfGenerator();
               pdfBuffer = generateDocumentPdfBuffer(docToRender, businessSettings);
@@ -2735,7 +3098,6 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
           ensureSignedDocsStore();
           const signedFilename = `receipt_${testDoc.documentNumber}_${testDoc.id}.pdf`;
-          const targetFilePath = path.join(SIGNED_DOCS_DIR, signedFilename);
 
           const { generateDocumentPdfBuffer } = await getPdfGenerator();
           const initialPdfBuffer = generateDocumentPdfBuffer(testDoc, business);
@@ -2754,7 +3116,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           }
 
           const sha256 = crypto.createHash('sha256').update(signedPdf).digest('hex');
-          fs.writeFileSync(targetFilePath, signedPdf);
+          archiveSignedPdf(signedFilename, signedPdf);
 
           // Also mirror to test package and artifact paths
           const pkgPath = path.join(DATA_DIR, 'test_packages', 'receipt_TEST-1001_signed.pdf');
@@ -2813,20 +3175,20 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         const parsedUrl = new URL(url, 'http://localhost');
         const customFilename = parsedUrl.searchParams.get('filename');
         let testPkgPath = path.join(DATA_DIR, 'test_packages', 'receipt_TEST-1001_signed.pdf');
+        let buf: Buffer | null = null;
 
         if (customFilename) {
-          const candidate = path.join(SIGNED_DOCS_DIR, path.basename(customFilename));
-          if (fs.existsSync(candidate)) {
-            testPkgPath = candidate;
-          }
+          buf = await readArchivedSignedPdf(customFilename);
+          testPkgPath = path.join(SIGNED_DOCS_DIR, path.basename(customFilename));
+        } else if (fs.existsSync(testPkgPath)) {
+          buf = fs.readFileSync(testPkgPath);
         }
 
-        if (!fs.existsSync(testPkgPath)) {
+        if (!buf) {
           res.statusCode = 404;
           res.end(JSON.stringify({ error: 'קובץ בדיקה חתום לא נמצא' }));
           return;
         }
-        const buf = fs.readFileSync(testPkgPath);
         res.statusCode = 200;
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Length', buf.length);
@@ -2844,9 +3206,12 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         const projects = readJson<any[]>(PROJECTS_FILE);
         const entries = readJson<any[]>(ENTRIES_FILE);
         const settings = fs.existsSync(APP_SETTINGS_FILE) ? readJson<any>(APP_SETTINGS_FILE) : null;
+        const deletions = readDeletions();
+        const syncMeta = buildSyncMeta();
+        const storageStatus = getPersistentStorageStatus();
 
         res.statusCode = 200;
-        res.end(JSON.stringify({ clients, projects, entries, settings }));
+        res.end(JSON.stringify({ clients, projects, entries, settings, deletions, syncMeta, storageStatus }));
         return;
       }
 
@@ -2856,8 +3221,10 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         await acquireLock();
         try {
           writeJson(APP_SETTINGS_FILE, newSettings);
+          const meta = ensureStoreMeta(true, true);
+          await flushPersistentWrites();
           res.statusCode = 200;
-          res.end(JSON.stringify({ success: true, settings: newSettings }));
+          res.end(JSON.stringify({ success: true, settings: newSettings, revision: meta.revision }));
         } finally {
           releaseLock();
         }
@@ -2877,10 +3244,13 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         try {
           const entries = readJson<any[]>(ENTRIES_FILE);
           const updated = entries.filter(e => e.id !== id);
+          const deletions = recordDeletions({ entries: [id] });
           writeJson(ENTRIES_FILE, updated);
+          const meta = ensureStoreMeta(true, true);
+          await flushPersistentWrites();
 
           res.statusCode = 200;
-          res.end(JSON.stringify({ success: true, deletedId: id }));
+          res.end(JSON.stringify({ success: true, deletedId: id, deletions, revision: meta.revision }));
         } finally {
           releaseLock();
         }
@@ -2889,8 +3259,8 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
       // 12. POST /api/app-data/entry/save - Save or update time entry
       if (req.method === 'POST' && url === '/api/app-data/entry/save') {
-        const entry = await readBody();
-        if (!entry || !entry.id) {
+        const body = await readBody();
+        if (!body || !body.id) {
           res.statusCode = 400;
           res.end(JSON.stringify({ error: 'פרטי רשומה חסרים' }));
           return;
@@ -2898,6 +3268,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
         await acquireLock();
         try {
+          const entry = { ...body, updatedAt: body.updatedAt || new Date().toISOString() };
           const entries = readJson<any[]>(ENTRIES_FILE);
           const idx = entries.findIndex(e => e.id === entry.id);
           if (idx >= 0) {
@@ -2905,10 +3276,13 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           } else {
             entries.unshift(entry);
           }
+          clearDeletion('entries', entry.id);
           writeJson(ENTRIES_FILE, entries);
+          const meta = ensureStoreMeta(true, true);
+          await flushPersistentWrites();
 
           res.statusCode = 200;
-          res.end(JSON.stringify({ success: true, entry }));
+          res.end(JSON.stringify({ success: true, entry, durable: getPersistentStorageStatus().isDurable, revision: meta.revision }));
         } finally {
           releaseLock();
         }
@@ -2939,16 +3313,25 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           const projects = readJson<any[]>(PROJECTS_FILE);
           const entries = readJson<any[]>(ENTRIES_FILE);
 
+          const deletedProjectIds = projects.filter(p => p.clientId === id).map(p => p.id);
+          const deletedEntryIds = entries.filter(e => e.clientId === id || deletedProjectIds.includes(e.projectId)).map(e => e.id);
           const updatedClients = clients.filter(c => c.id !== id);
           const updatedProjects = projects.filter(p => p.clientId !== id);
-          const updatedEntries = entries.filter(e => e.clientId !== id);
+          const updatedEntries = entries.filter(e => e.clientId !== id && !deletedProjectIds.includes(e.projectId));
 
+          const deletions = recordDeletions({
+            clients: [id],
+            projects: deletedProjectIds,
+            entries: deletedEntryIds,
+          });
           writeJson(CLIENTS_FILE, updatedClients);
           writeJson(PROJECTS_FILE, updatedProjects);
           writeJson(ENTRIES_FILE, updatedEntries);
+          const meta = ensureStoreMeta(true, true);
+          await flushPersistentWrites();
 
           res.statusCode = 200;
-          res.end(JSON.stringify({ success: true, deletedId: id }));
+          res.end(JSON.stringify({ success: true, deletedId: id, deletions, revision: meta.revision }));
         } finally {
           releaseLock();
         }
@@ -2957,8 +3340,8 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
       // 14. POST /api/app-data/client/save - Save or update client
       if (req.method === 'POST' && url === '/api/app-data/client/save') {
-        const client = await readBody();
-        if (!client || !client.id) {
+        const body = await readBody();
+        if (!body || !body.id) {
           res.statusCode = 400;
           res.end(JSON.stringify({ error: 'פרטי לקוח חסרים' }));
           return;
@@ -2966,6 +3349,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
         await acquireLock();
         try {
+          const client = { ...body, updatedAt: body.updatedAt || new Date().toISOString() };
           const clients = readJson<any[]>(CLIENTS_FILE);
           const idx = clients.findIndex(c => c.id === client.id);
           if (idx >= 0) {
@@ -2973,10 +3357,13 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           } else {
             clients.push(client);
           }
+          clearDeletion('clients', client.id);
           writeJson(CLIENTS_FILE, clients);
+          const meta = ensureStoreMeta(true, true);
+          await flushPersistentWrites();
 
           res.statusCode = 200;
-          res.end(JSON.stringify({ success: true, client }));
+          res.end(JSON.stringify({ success: true, client, durable: getPersistentStorageStatus().isDurable, revision: meta.revision }));
         } finally {
           releaseLock();
         }
@@ -3006,14 +3393,21 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           const projects = readJson<any[]>(PROJECTS_FILE);
           const entries = readJson<any[]>(ENTRIES_FILE);
 
+          const deletedEntryIds = entries.filter(e => e.projectId === id).map(e => e.id);
           const updatedProjects = projects.filter(p => p.id !== id);
           const updatedEntries = entries.filter(e => e.projectId !== id);
 
+          const deletions = recordDeletions({
+            projects: [id],
+            entries: deletedEntryIds,
+          });
           writeJson(PROJECTS_FILE, updatedProjects);
           writeJson(ENTRIES_FILE, updatedEntries);
+          const meta = ensureStoreMeta(true, true);
+          await flushPersistentWrites();
 
           res.statusCode = 200;
-          res.end(JSON.stringify({ success: true, deletedId: id }));
+          res.end(JSON.stringify({ success: true, deletedId: id, deletions, revision: meta.revision }));
         } finally {
           releaseLock();
         }
@@ -3022,8 +3416,8 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
       // 16. POST /api/app-data/project/save - Save or update project
       if (req.method === 'POST' && url === '/api/app-data/project/save') {
-        const project = await readBody();
-        if (!project || !project.id) {
+        const body = await readBody();
+        if (!body || !body.id) {
           res.statusCode = 400;
           res.end(JSON.stringify({ error: 'פרטי פרויקט חסרים' }));
           return;
@@ -3031,6 +3425,7 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
 
         await acquireLock();
         try {
+          const project = { ...body, updatedAt: body.updatedAt || new Date().toISOString() };
           const projects = readJson<any[]>(PROJECTS_FILE);
           const idx = projects.findIndex(p => p.id === project.id);
           if (idx >= 0) {
@@ -3038,10 +3433,13 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           } else {
             projects.push(project);
           }
+          clearDeletion('projects', project.id);
           writeJson(PROJECTS_FILE, projects);
+          const meta = ensureStoreMeta(true, true);
+          await flushPersistentWrites();
 
           res.statusCode = 200;
-          res.end(JSON.stringify({ success: true, project }));
+          res.end(JSON.stringify({ success: true, project, durable: getPersistentStorageStatus().isDurable, revision: meta.revision }));
         } finally {
           releaseLock();
         }
@@ -3056,9 +3454,11 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
           if (Array.isArray(clients)) writeJson(CLIENTS_FILE, clients);
           if (Array.isArray(projects)) writeJson(PROJECTS_FILE, projects);
           if (Array.isArray(entries)) writeJson(ENTRIES_FILE, entries);
+          const meta = ensureStoreMeta(true, true);
+          await flushPersistentWrites();
 
           res.statusCode = 200;
-          res.end(JSON.stringify({ success: true }));
+          res.end(JSON.stringify({ success: true, revision: meta.revision }));
         } finally {
           releaseLock();
         }
@@ -3086,12 +3486,14 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         await acquireLock();
         try {
           if (body && body.activeTimer && body.activeTimer.isRunning) {
-            fs.writeFileSync(TIMER_FILE, JSON.stringify(body.activeTimer, null, 2), 'utf8');
+            writeJson(TIMER_FILE, body.activeTimer);
           } else {
             if (fs.existsSync(TIMER_FILE)) {
               try { fs.unlinkSync(TIMER_FILE); } catch {}
             }
+            deletePersistedFilePath(TIMER_FILE);
           }
+          await flushPersistentWrites();
           res.statusCode = 200;
           res.end(JSON.stringify({ success: true }));
         } finally {
