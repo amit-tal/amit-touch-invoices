@@ -673,6 +673,93 @@ function ensureDataStore(): void {
 
     ensureStoreMeta(true);
 
+    // --------------------------------------------------------------------------
+    // Automatic Protected Migration for empty / uninitialized persistent store:
+    // If the database has 0 business records or is marked empty_uninitialized,
+    // and verified recovery file exists:
+    // --------------------------------------------------------------------------
+    const verifiedMigrationFile = path.join(SEED_DIR, 'recovery_2026-11-11_verified.json');
+    const currentMeta = readJsonSafe<StoreMeta | null>(STORE_META_FILE, null);
+    const hasExistingRecords = computeDatasetHasRecords();
+    const shouldAutoMigrate =
+      process.env.AUTO_RECOVER_VERIFIED === 'true' ||
+      Boolean(
+        (process.env.RENDER || process.env.RENDER_EXTERNAL_URL || process.env.NODE_ENV === 'production') &&
+        process.env.DATABASE_URL
+      );
+
+    if (shouldAutoMigrate && (!hasExistingRecords || currentMeta?.datasetState === 'empty_uninitialized') && fs.existsSync(verifiedMigrationFile)) {
+      try {
+        const recoveryData = JSON.parse(fs.readFileSync(verifiedMigrationFile, 'utf8'));
+        if (Array.isArray(recoveryData.documents) && recoveryData.documents.length > 0) {
+          console.log('[AMIT TOUCH RECOVERY] Executing protected migration of verified business dataset into store...');
+
+          // 1. Documents
+          writeJson(DOCUMENTS_FILE, recoveryData.documents);
+
+          // 2. Entries (33 time entries)
+          if (Array.isArray(recoveryData.entries) && recoveryData.entries.length > 0) {
+            writeJson(ENTRIES_FILE, recoveryData.entries);
+          }
+
+          // 3. Clients & Projects
+          if (Array.isArray(recoveryData.clients) && recoveryData.clients.length > 0) {
+            writeJson(CLIENTS_FILE, recoveryData.clients);
+          }
+          if (Array.isArray(recoveryData.projects) && recoveryData.projects.length > 0) {
+            writeJson(PROJECTS_FILE, recoveryData.projects);
+          }
+
+          // 4. Sequences (enforce minimum receiptNext: 250021)
+          const currentSeqs = readJsonSafe<SequenceSettings>(SEQUENCES_FILE, defaultSequences);
+          const safeSequences: SequenceSettings = {
+            ...currentSeqs,
+            ...(recoveryData.sequences || {}),
+            receiptNext: Math.max(currentSeqs?.receiptNext || 250021, recoveryData.sequences?.receiptNext || 250021, 250021),
+            paymentRequestNext: Math.max(currentSeqs?.paymentRequestNext || 40022, recoveryData.sequences?.paymentRequestNext || 40022, 40022),
+            isProductionActive: true,
+            isLocked: true,
+          };
+          writeJson(SEQUENCES_FILE, safeSequences);
+
+          // 5. Business & Settings
+          if (recoveryData.business && Object.keys(recoveryData.business).length > 0) {
+            writeJson(BUSINESS_FILE, recoveryData.business);
+          }
+          if (recoveryData.settings && Object.keys(recoveryData.settings).length > 0) {
+            writeJson(APP_SETTINGS_FILE, recoveryData.settings);
+          }
+
+          // 6. Signed PDFs (restore exact original binary to signed_documents and PostgreSQL)
+          if (recoveryData.signedPdfs && typeof recoveryData.signedPdfs === 'object') {
+            ensureSignedDocsStore();
+            for (const [pdfName, b64] of Object.entries(recoveryData.signedPdfs)) {
+              if (typeof pdfName === 'string' && typeof b64 === 'string' && pdfName.endsWith('.pdf')) {
+                const safeName = path.basename(pdfName);
+                const rawB64 = b64.replace(/^data:application\/pdf;base64,/, '');
+                archiveSignedPdf(safeName, Buffer.from(rawB64, 'base64'));
+              }
+            }
+          }
+
+          // 7. Store Meta (mark active with revision 2)
+          const activeMeta: StoreMeta = {
+            schemaVersion: 1,
+            instanceId: currentMeta?.instanceId || crypto.randomUUID(),
+            initializedAt: currentMeta?.initializedAt || new Date().toISOString(),
+            lastMutationAt: new Date().toISOString(),
+            datasetState: 'active',
+            revision: Math.max(currentMeta?.revision || 1, 2),
+          };
+          writeStoreMeta(activeMeta);
+
+          console.log(`[AMIT TOUCH RECOVERY] Protected migration completed: restored ${recoveryData.documents.length} documents (including Receipt #250020), ${recoveryData.entries?.length || 0} time entries, signed PDFs, and sequences.`);
+        }
+      } catch (migErr) {
+        console.error('[AMIT TOUCH RECOVERY ERROR] Failed executing protected migration:', migErr);
+      }
+    }
+
     // Normalize legacy delivery statuses and label historical Ethereal test attempts
     try {
       if (fs.existsSync(DOCUMENTS_FILE)) {
@@ -1038,17 +1125,22 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
     };
 
     try {
-      await ensureServerStoreReady();
+      try {
+        await ensureServerStoreReady();
+      } catch (storeErr) {
+        // Allow /api/health to inspect and report store connectivity failures
+      }
 
       // Public Health & Storage Diagnostics Endpoint (no PII or business records)
       if (req.method === 'GET' && (url === '/api/health' || url.startsWith('/api/health?'))) {
         const storageStatus = getPersistentStorageStatus();
-        const syncMeta = buildSyncMeta();
+        let syncMeta: any = {};
+        try { syncMeta = buildSyncMeta(); } catch {}
         res.statusCode = 200;
         res.end(JSON.stringify({
           ok: true,
           storageStatus,
-          datasetState: syncMeta.datasetState,
+          datasetState: syncMeta.datasetState || 'unreachable',
           isDurable: storageStatus.isDurable,
           storageBackend: storageStatus.backend,
         }));
@@ -1390,6 +1482,22 @@ export function documentServerMiddleware(): Connect.NextHandleFunction {
         await flushPersistentWrites();
         res.statusCode = 200;
         res.end(JSON.stringify({ success: true }));
+        return;
+      }
+
+      // ==========================================
+      // Durable Storage Gatekeeper: Protect against unpersisted mutations / ephemeral fallback
+      // ==========================================
+      const currentStorageStatus = getPersistentStorageStatus();
+      if (currentStorageStatus.dbConfigured && !currentStorageStatus.dbConnected) {
+        res.statusCode = 503;
+        res.setHeader('Retry-After', '10');
+        res.end(JSON.stringify({
+          error: 'שגיאת תקשורת למסד הנתונים הקבוע (Durable Database Connection Unavailable). המערכת מושבתת זמנית לפעולות נתונים כדי להגן על נתוני העסק מפני דריסה.',
+          code: 'DATABASE_UNAVAILABLE',
+          retryAfter: 10,
+          details: currentStorageStatus.lastError,
+        }));
         return;
       }
 

@@ -238,7 +238,8 @@ export async function initPersistentStore(): Promise<void> {
 }
 
 export async function ensurePersistentStoreReady(): Promise<void> {
-  if (!initPromise) {
+  if (!initPromise || (!dbConnected && isDatabaseConfigured())) {
+    initPromise = null;
     await initPersistentStore();
   } else {
     await initPromise;
