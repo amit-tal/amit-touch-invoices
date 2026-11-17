@@ -760,6 +760,37 @@ function ensureDataStore(): void {
       }
     }
 
+    // --------------------------------------------------------------------------
+    // Incremental Entry Recovery:
+    // If verified recovery package contains time entries that are missing in the active store
+    // (e.g. forensically extracted entries from Chrome LevelDB session hold):
+    // --------------------------------------------------------------------------
+    if (shouldAutoMigrate && fs.existsSync(verifiedMigrationFile)) {
+      try {
+        const recoveryData = JSON.parse(fs.readFileSync(verifiedMigrationFile, 'utf8'));
+        if (Array.isArray(recoveryData.entries) && recoveryData.entries.length > 0) {
+          const currentEntries = readJsonSafe<any[]>(ENTRIES_FILE, []);
+          const existingIds = new Set(currentEntries.map(e => e.id));
+          const missingEntries = recoveryData.entries.filter((e: any) => e && e.id && !existingIds.has(e.id));
+          if (missingEntries.length > 0) {
+            console.log(`[AMIT TOUCH RECOVERY] Merging ${missingEntries.length} forensically recovered time entries into persistent store...`);
+            const mergedEntries = [...currentEntries, ...missingEntries];
+            writeJson(ENTRIES_FILE, mergedEntries);
+            const currentMetaNow = readJsonSafe<StoreMeta | null>(STORE_META_FILE, null);
+            if (currentMetaNow) {
+              writeStoreMeta({
+                ...currentMetaNow,
+                lastMutationAt: new Date().toISOString(),
+                revision: (currentMetaNow.revision || 1) + 1,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[AMIT TOUCH RECOVERY] Error merging incremental recovery entries:', err);
+      }
+    }
+
     // Normalize legacy delivery statuses and label historical Ethereal test attempts
     try {
       if (fs.existsSync(DOCUMENTS_FILE)) {
