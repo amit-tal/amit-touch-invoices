@@ -345,24 +345,22 @@ export const LoginView: React.FC = () => {
           </button>
 
           {/* Recovery Toggle Link */}
-          {!isSetupMode && (
-            <div className="text-center pt-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setErrorMessage(null);
-                  setSuccessMessage(null);
-                  setIsRecoveryMode(!isRecoveryMode);
-                  if (!isRecoveryMode && !email.trim()) {
-                    setEmail('amit2001tal@gmail.com');
-                  }
-                }}
-                className="text-xs text-[#88463F] hover:text-[#5c2420] underline decoration-[#BC796F]/40 underline-offset-4 transition-colors font-medium cursor-pointer"
-              >
-                {isRecoveryMode ? 'חזרה למסך כניסה רגיל' : 'שכחת סיסמה? שחזור חשבון בעלים'}
-              </button>
-            </div>
-          )}
+          <div className="text-center pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setErrorMessage(null);
+                setSuccessMessage(null);
+                setIsRecoveryMode(!isRecoveryMode);
+                if (!isRecoveryMode && !email.trim()) {
+                  setEmail('amit2001tal@gmail.com');
+                }
+              }}
+              className="text-xs text-[#88463F] hover:text-[#5c2420] underline decoration-[#BC796F]/40 underline-offset-4 transition-colors font-medium cursor-pointer"
+            >
+              {isRecoveryMode ? 'חזרה למסך כניסה רגיל' : 'שכחת סיסמה? שחזור חשבון בעלים'}
+            </button>
+          </div>
         </form>
 
         {/* Footer Notice */}

@@ -208,16 +208,16 @@ export function getOwnerAccount(): OwnerAccount | null {
     return initialOwner;
   }
 
-  // Fallback 2: Check seed fallback ONLY when ALLOW_SEED_AUTOLOAD is explicitly enabled
-  if (process.env.ALLOW_SEED_AUTOLOAD === 'true') {
-    const seedAuthPath = path.resolve(process.cwd(), 'server', 'seed', 'auth.json');
-    if (fs.existsSync(seedAuthPath)) {
-      try {
-        const seedData = JSON.parse(fs.readFileSync(seedAuthPath, 'utf8'));
+  // Fallback 2: Check seed fallback for existing owner account
+  const seedAuthPath = path.resolve(process.cwd(), 'server', 'seed', 'auth.json');
+  if (fs.existsSync(seedAuthPath)) {
+    try {
+      const seedData = JSON.parse(fs.readFileSync(seedAuthPath, 'utf8'));
+      if (seedData && seedData.email && seedData.passwordHash) {
         saveOwnerAccount(seedData);
         return seedData;
-      } catch {}
-    }
+      }
+    } catch {}
   }
 
   return null;
